@@ -76,7 +76,10 @@ Identical to official Phobos: put `Phobos.dll` into your YR game directory and l
 - **Linux (fork addition):** `scripts/linux/build_linux.sh Release --build-type RELEASE` runs the real
   MSVC toolchain under Wine — see `scripts/linux/README.md`.
 - **CI:** publishing a GitHub Release triggers `.github/workflows/release.yml`, which builds with
-  `BuildType=RELEASE` and attaches the DLL to the release.
+  `BuildType=RELEASE` and attaches `Phobos.dll` / `Phobos.pdb` to the release. This fork tags its
+  releases `v0.5.0.0-alpha1-pbsnewN`, which upstream's changelog extractor does not recognise, so
+  that step was made non-fatal here (`Fallback Release Notes`) — otherwise the run would abort
+  before the assets are uploaded.
 
 > **Build type decides the version string.** Only a `RELEASE` build reports
 > `v0.5.0.0-alpha1-pbsnew1`. A plain local build — `--build-type` omitted, or the upstream

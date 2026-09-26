@@ -103,7 +103,9 @@ jobs:
     - name: Upload Release Assets
       uses: softprops/action-gh-release@v2
       with:
-        name: ${{ steps.info.outputs.release-name }}
+        # Fork change: upstream passes name: "Phobos $tag (Pre-release)" here, which
+        # overwrites whatever title the release author typed and makes this fork's
+        # releases read as official Phobos ones. The title is left untouched instead.
         files: |
           ${{ env.BUILD_CONFIGURATION }}/Phobos.dll
           ${{ env.BUILD_CONFIGURATION }}/Phobos.pdb

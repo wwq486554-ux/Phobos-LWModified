@@ -67,13 +67,18 @@ jobs:
       shell: pwsh
       run: |
         $tag = "${{ github.ref_name }}"
-        $body = @"
-        Unofficial **Phobos-LWModified** build for ``$tag``.
-
-        This is not official Phobos. See the repository README for the `unofficial fork`
-        notice, what upstream PRs are integrated here and what this fork adds.
-        "@
-        Set-Content -Path RELEASE_NOTES.md -Value $body -Encoding utf8
+        # Deliberately an array of plain double-quoted strings: a here-string would
+        # need its terminator at column 0, and a lone backtick inside a
+        # double-quoted string is an escape character in PowerShell, not Markdown
+        # formatting. Either one could fail this step, and this step runs before
+        # "Upload Release Assets".
+        $lines = @(
+          "Unofficial **Phobos-LWModified** build for $tag.",
+          "",
+          "This is not official Phobos. See the repository README for the unofficial-fork",
+          "notice, what upstream PRs are integrated here and what this fork adds."
+        )
+        Set-Content -Path RELEASE_NOTES.md -Value $lines -Encoding utf8
 
     - name: Append Changelog to the Release Notes
       shell: pwsh

@@ -347,13 +347,34 @@ if (( ${#pending[@]} > 0 )); then
 fi
 
 # --- 4. resources -----------------------------------------------------------
+#
+# The resources must see the same build type as the sources. src/version.rc
+# includes Phobos.version.h, whose PRODUCT_VERSION / FILE_VERSION_STR differ
+# between a plain local build and a NIGHTLY/RELEASE one (the latter two append
+# PRERELEASE_SUFFIX). rc.exe only honours /d definitions, so the flag has to be
+# repeated here - otherwise the DLL's StringFileInfo always reports a local
+# build's version even when --build-type RELEASE was requested.
+rc_defs=()
+case "$build_type" in
+  NIGHTLY) rc_defs+=( /dNIGHTLY ) ;;
+  RELEASE) rc_defs+=( /dRELEASE ) ;;
+esac
+
 link_input=()
 link_input_win=()
 for r in "${resources[@]}"; do
   res="$int_dir/$(basename "${r%.rc}").res"
-  if [[ ! -f $res || $PBS_ROOT/$r -nt $res ]]; then
+  # A .res bakes in the preprocessor state of the .rc it came from. Comparing it
+  # against the .rc timestamp alone is not enough: switching --build-type does not
+  # touch the .rc's timestamp but does change the version string inside, so a local
+  # build followed by a RELEASE build would silently ship the local build's
+  # FileVersion/ProductVersion metadata. force_all is set whenever the
+  # compiler-option hash (which includes /DRELEASE or /DNIGHTLY) changes, so gate
+  # the resources on it too. The .res lives in MSBuild's own IntDir, which this
+  # script otherwise leaves alone, hence the explicit invalidation here.
+  if (( force_all )) || [[ ! -f $res || $PBS_ROOT/$r -nt $res ]]; then
     pbs_info "RC ${r}"
-    ( cd "$scratch_dir" && wine "$PBS_SDK_RC" /l0x0409 /nologo \
+    ( cd "$scratch_dir" && wine "$PBS_SDK_RC" /l0x0409 /nologo "${rc_defs[@]+"${rc_defs[@]}"}" \
         "/fo$(pbs_w "$res")" "$(pbs_w "$PBS_ROOT/$r")" ) >"$log_dir/rc_$(basename "$r").log" 2>&1 \
       || { pbs_show_log "$log_dir/rc_$(basename "$r").log" >&2; pbs_die "resource compilation failed for $r"; }
   fi

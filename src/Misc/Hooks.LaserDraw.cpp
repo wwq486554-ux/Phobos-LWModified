@@ -1,5 +1,7 @@
 #include <Ext\WeaponType\Body.h>
+#include <Ext/BulletType/Body.h>
 #include <Ext/Techno/Body.h>
+#include <Ext/Bullet/Trajectories/PhobosTrajectory.h>
 #include <Helpers/Macro.h>
 #include <Utilities/GeneralUtils.h>
 #include <unordered_map>
@@ -290,11 +292,35 @@ DEFINE_HOOK(0x6FD210, TechnoClass_LaserZap_SetTrackingContext, 0x7)
 
 DEFINE_HOOK(0x6FD446, TechnoClass_LaserZap_Tracking, 0x7)
 {
+	GET(WeaponTypeClass*, pWeapon, ECX);
+	GET(LaserDrawClass*, pLaser, EAX);
+
+	// Fork: virtual trajectories (Trajectory=Engrave / Trajectory=Tracing) draw their
+	// own per-frame laser that follows the bullet (muzzle -> moving bullet tip) inside
+	// PhobosVirtualTrajectory. The vanilla firing zap here would draw an extra fixed
+	// laser from the muzzle to the locked target for LaserDuration frames, making the
+	// engrave look like it keeps aiming at the target. Suppress that zap so only the
+	// sweeping laser stays. Mirrors SimulatedFiringLaser() which already skips
+	// Engrave/Tracing for simulated fires.
+	if (pWeapon && pWeapon->Projectile)
+	{
+		if (const auto pTrajType = BulletTypeExt::Fetch(pWeapon->Projectile)->TrajectoryType.get())
+		{
+			const auto flag = pTrajType->Flag();
+
+			if (flag == TrajectoryFlag::Engrave || flag == TrajectoryFlag::Tracing)
+			{
+				if (pLaser)
+					pLaser->Duration = 0;
+
+				return 0;
+			}
+		}
+	}
+
 	if (Phobos::Optimizations::DisableLaserTracking)
 		return 0;
 
-	GET(WeaponTypeClass*, pWeapon, ECX);
-	GET(LaserDrawClass*, pLaser, EAX);
 	const auto mode = WeaponTypeExt::Fetch(pWeapon)->LaserPositionUpdate.Get();
 
 	if (mode == PositionFollow::None)

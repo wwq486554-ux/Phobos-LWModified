@@ -77,6 +77,7 @@ void UnitTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 
 	this->CrateGoodie_RerollChance.Read(exINI, pSection, "CrateGoodie.RerollChance");
 	this->NoTurret_TrackTarget.Read(exINI, pSection, "NoTurret.TrackTarget");
+	this->BodyWeapon.Read(exINI, pSection, "BodyWeapon");
 	this->WaterImage_ConditionYellow.Read(exINI, pSection, "WaterImage.ConditionYellow");
 	this->WaterImage_ConditionRed.Read(exINI, pSection, "WaterImage.ConditionRed");
 
@@ -200,6 +201,7 @@ void UnitTypeExt::Serialize(T& Stm)
 		.Process(this->ExtraTurretCount)
 		.Process(this->ExtraTurretOffsets)
 		.Process(this->BurstPerTurret)
+		.Process(this->BodyWeapon)
 		;
 }
 

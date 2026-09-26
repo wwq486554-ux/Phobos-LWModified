@@ -35,6 +35,10 @@ public:
 
 	static CoordStruct GetSimpleFLH(InfantryClass* pThis, int weaponIndex, bool& FLHFound);
 
+	// True when the weapon this infantry would use against pTarget is a real
+	// attack weapon: it exists, has a warhead, and is not a bomb-disarm tool.
+	static bool HasAttackWeapon(InfantryClass* pThis, ObjectClass* pTarget);
+
 	class ExtContainer final : public Container<InfantryExt>
 	{
 	public:

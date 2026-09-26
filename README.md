@@ -1,13 +1,97 @@
 ![Phobos YR Engine Extension](logo.png)
 
-[![Github All Releases](https://img.shields.io/github/downloads/Phobos-developers/Phobos/total.svg)](https://github.com/Phobos-developers/Phobos/releases)
-[![Docs status](https://readthedocs.org/projects/phobos/badge/?version=latest)](https://phobos.readthedocs.io/en/latest/?badge=latest)
-[![Workflow](https://img.shields.io/github/actions/workflow/status/Phobos-developers/Phobos/nightly.yml?branch=develop)](https://github.com/Phobos-developers/Phobos/actions)
-[![EditorConfig](https://github.com/Phobos-developers/Phobos/workflows/EditorConfig/badge.svg)](https://github.com/Phobos-developers/Phobos/actions?query=workflow%3AEditorConfig)
-[![license](https://img.shields.io/github/license/Phobos-developers/Phobos.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
+[![license](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](https://www.gnu.org/licenses/gpl-3.0.html)
 
-> **Warning**
-> The project is currently not maintained actively enough and thus we are looking for active maintainers at the moment. Please message us [in Discord channel](https://discord.gg/sZeMzz6qVg) (or PM Kerbiter directly).
+---
+
+> # ⚠️ Unofficial fork — 非官方整合版
+>
+> **This repository is NOT official Phobos.** It is a personal, non-commercial
+> modification of Phobos. It is neither affiliated with, endorsed by, nor
+> supported by the Phobos development team or Electronic Arts.
+>
+> **本仓库不是官方 Phobos。** 它是 Phobos 的个人非商业修改版，与 Phobos 开发团队及
+> Electronic Arts 均无隶属、认可或支持关系。
+>
+> |  |  |
+> |---|---|
+> | **Based on / 基线** | Phobos `v0.5.0.0-alpha1` (`5a72f20641ec9a23f14fcc3959f647c08c736cd2`) |
+> | **Also integrates / 另整合** | upstream PR [#2060](https://github.com/Phobos-developers/Phobos/pull/2060) **"New trajectory system" — still an unmerged draft.** It reopens [#1582](https://github.com/Phobos-developers/Phobos/pull/1582) by [@CrimRecya](https://github.com/CrimRecya), reopened by [@TaranDahl](https://github.com/TaranDahl). |
+> | **Fork additions / 本分支追加** | `SpecialAction` · `SweepFire` · `WeaponXFire` · `LocomotorWeapon` · `BodyWeapon` · `AdvancedAircraftMissions` · Scatter fixes · `Temporal` any-slot fix · engineer attack · Engrave `FiringAnim` |
+> | **Version string / 版本串** | `v0.5.0.0-alpha1-pbsnew1` |
+> | **Modification date / 修改日期** | 2026-09-26 |
+>
+> If a log, crash report or file property mentions `pbsnew`, you are running this
+> fork and **not** official Phobos.
+> **请注意不要把本版本的 bug 报到官方 Phobos 仓库。**
+>
+> - Upstream project: <https://github.com/Phobos-developers/Phobos>
+> - Upstream docs: <https://phobos.readthedocs.io> · Phobos CN: <https://phoboscn.top>
+> - Upstream Discord: <https://discord.gg/sZeMzz6qVg>
+
+## What this fork changes / 本分支改了什么
+
+### Integrated from upstream (not yet merged)
+
+**PR [#2060](https://github.com/Phobos-developers/Phobos/pull/2060) "New trajectory system"** (original work by
+[@CrimRecya](https://github.com/CrimRecya) in [#1582](https://github.com/Phobos-developers/Phobos/pull/1582), reopened
+by [@TaranDahl](https://github.com/TaranDahl)) — merged here by hand on top of `v0.5.0.0-alpha1`:
+
+- New trajectory framework with `Actual`/`Virtual` base classes, replacing the old flat
+  `Straight`/`Bombard`/`Parabola` implementations.
+- Actual trajectories: `Straight`, `Bombard`, `Missile`, `Parabola`. Virtual trajectories: `Engrave`, `Tracing`.
+- Projectile life cycle, end conditions and retargeting logic.
+- Projectiles that release warheads (`AdditionalWarheads`) and weapons (`AdditionalWeapons`) in flight.
+- The `Trajectory-demo-*.gif` images used by the documentation.
+
+> This is a **draft** PR. Upstream has not merged it, so nothing here is guaranteed to match
+> what upstream eventually ships. See `docs/New-or-Enhanced-Logics.md` for the full INI reference.
+
+### Added by this fork
+
+| Feature | Summary |
+|---|---|
+| **SpecialAction** | A unit-triggered active ability (`SpecialAction=...`) with its own cooldown, 8 action kinds, an optional per-unit super weapon (`SpecialAction.SuperWeaponSource=unit`), cooldown pips and an `AttachEffect` release action. |
+| **SweepFire** | Weapon-level sweeping fire: one trigger fires a whole series of real, individually interceptable shots along a configurable line while ammo, `ROF` and `Burst` stay vanilla. |
+| **WeaponXFire** | `Weapon%dFire` in `artmd.ini` lets any weapon slot pick its own firing animation group, instead of only slot 0 getting `FireUp`. |
+| **LocomotorWeapon** | Reworks `IsLocomotor=yes`: every `Locomotor=` GUID releases its victim properly instead of leaving it permanently unable to move, `DropPod` no longer crashes, and the behaviour is configurable through `LocomotorWeapon.*` warhead keys. |
+| **BodyWeapon** | `BodyWeapon=0,1` lists vehicle weapon slots that may not use the turret — the turret is locked to the hull and the vehicle must turn its body to aim. |
+| **AdvancedAircraftMissions** | Aircraft loiter over their destination instead of flying home, with `circle`/`hover` modes, plus a manual return that speeds up the cruise back to base. |
+| **Scatter fixes** | Fixes scatter behaviour for laser, electric bolt and rad beam weapons. |
+| **Temporal fix** | `Temporal=yes` warheads are no longer restricted to a unit's first weapon slot (and no longer crash when fired from another slot). |
+| **Engineer attack** | Engineers can attack with their regular weapon. |
+| **Engrave `FiringAnim`** | `Trajectory.Engrave.FiringAnim` / `FiringAnimInterval` for a continuous firing animation. |
+
+## Installation / 安装
+
+Identical to official Phobos: put `Phobos.dll` into your YR game directory and launch through
+**SyringeEx**. `.pdb` is only needed for crash reports.
+
+> ⚠️ Do not mix this DLL with an official `Phobos.dll`. Back up the previous file first.
+> 不要把本 DLL 与官方 `Phobos.dll` 混放，先备份原文件。
+
+## Building / 构建
+
+- **Windows (upstream way):** `scripts\build_release.bat` with Visual Studio 2022 (MSVC v143).
+- **Linux (fork addition):** `scripts/linux/build_linux.sh Release` runs the real MSVC toolchain under
+  Wine — see `scripts/linux/README.md`.
+- **CI:** publishing a GitHub Release triggers `.github/workflows/release.yml`, which builds the DLL
+  and attaches it to the release.
+
+## Known issues / 已知问题
+
+- Multiplayer sync of `SpecialAction` (`Weapon` pre-load and per-unit super weapon) has **not** been verified.
+- Some features were only compile-verified, not play-tested, at the time of this release.
+- This fork tracks upstream `v0.5.0.0-alpha1` and is **not** synced with current upstream `develop`.
+
+## License / 许可
+
+GPL-3.0 — see [`LICENSE.md`](LICENSE.md). As a modification it also follows the
+[EA C&C modding guidelines](https://www.ea.com/games/command-and-conquer/command-and-conquer-remastered/news/modding-faq):
+**non-commercial only**, and no game assets are redistributed here.
+This project has no affiliation with Electronic Arts Inc.
+
+---
 
 # Phobos
 

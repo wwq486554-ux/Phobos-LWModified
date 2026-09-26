@@ -5,12 +5,65 @@
 #include <Utilities/Container.h>
 #include <Utilities/Detach.h>
 #include <Utilities/TemplateDef.h>
+#include <Utilities/Macro.h>
+#include <Ext/Bullet/Body.h>
 #include <New/Entity/ShieldClass.h>
 #include <New/Entity/LaserTrailClass.h>
 #include <New/Entity/AttachEffectClass.h>
 
 class AirstrikeClass;
 class BulletClass;
+
+// One sweep in progress. A weapon with SweepFire enabled walks a virtual line
+// once per trigger, firing a real shot every ROF frames. Burst=N fires N of
+// these concurrently, which is why they live in a container on the techno.
+struct SweepFireInstance
+{
+	int WeaponIndex { -1 }; // Weapon slot that started this sweep
+	int BurstIndex { -1 }; // Position in the current Burst, decides the mirroring
+	CDTimerClass ShotTimer {}; // Frames left until the next shot of this sweep
+	CDTimerClass SweepTimer {}; // Frames left until the aim point reaches the line end
+	CoordStruct LineSource { CoordStruct::Empty }; // World-space start of the line
+	CoordStruct LineTarget { CoordStruct::Empty }; // World-space end of the line
+	// World-space point the virtual offsets are resolved against (normally the target). Kept
+	// separately from the two ends so that SweepFire.AttachToTarget can move it and
+	// SweepFire.UpdateDirection can turn the line around it.
+	CoordStruct AnchorCoord { CoordStruct::Empty };
+	double RotateRadian { 0.0 }; // Orientation the line was resolved with
+	bool Mirrored { false }; // Whether the virtual offsets were mirrored along Y
+	int ShotsFired { 0 }; // Follow-up shots fired so far, for diagnostics
+	double LastDistance { 0.0 }; // Distance along the line the last shot was fired at
+	DWORD AnchorTargetID { 0 }; // UniqueID of the target the line is attached to, 0 if none
+
+	bool Load(PhobosStreamReader& stm, bool registerForChange);
+	bool Save(PhobosStreamWriter& stm) const;
+
+private:
+	template <typename T>
+	bool Serialize(T& stm);
+};
+
+// Diagnostic instrumentation for the SweepFire mechanism. Development only: a game that does not
+// set SweepFire.ControlProbe=yes on some weapon writes no SweepFire probe to debug.log at all.
+// Even when switched on, every site keeps its own line budget, so a sweep cannot flood the log.
+namespace SweepFireDiag
+{
+	// Compile-time master switch. Turn it off to drop the probes from a build entirely.
+	constexpr bool Enabled = true;
+
+	extern int Remaining;
+	extern int HookEntryRemaining;
+
+	// True when the probes are switched on: the compile-time master says yes and some weapon
+	// opted in. Sites that keep their own line budget use this; the rest use Allowed().
+	bool On();
+	// On() plus a shared per-session line budget, for the sites that have no budget of their own.
+	bool Allowed();
+	bool HookEntryAllowed();
+	// True the first time a given (hook site, weapon) pair is seen. Used to list every weapon
+	// that actually reaches the Fire_At hooks, without spamming.
+	bool FirstTime(int site, const char* pWeaponId);
+}
 
 class TechnoExt : public RadioExt, public Detach::Listener<AirstrikeClass>
 {
@@ -48,6 +101,8 @@ public:
 	bool CanCloakDuringRearm; // Current rearm timer was started by DecloakToFire=no weapon.
 	int WHAnimRemainingCreationInterval;
 	WeaponTypeClass* LastWeaponType;
+	CoordStruct LastWeaponFLH;
+	std::shared_ptr<PhobosMap<BulletTypeClass*, BulletGroupData>> TrajectoryGroup;
 	CellClass* FiringObstacleCell; // Set on firing if there is an obstacle cell between target and techno, used for updating WaveClass target etc.
 	bool IsDetachingForCloak; // Used for checking animation detaching, set to true before calling Detach_All() on techno when this anim is attached to and to false after when cloaking only.
 	int BeControlledThreatFrame;
@@ -64,6 +119,41 @@ public:
 	AirstrikeClass* AirstrikeTargetingMe;
 
 	bool IsSelected;
+
+	// --- SpecialAction ---
+	// Cooldown of this unit's own special ability, independent of weapon,
+	// super weapon or deploy timers.
+	CDTimerClass SpecialActionTimer;
+	// Frame of the last successful SpecialAction use; -1 means never used.
+	int LastSpecialActionFrame;
+	// Weapon slot the engine is asked to use while a "Weapon" SpecialAction is
+	// firing. -1 means "let the engine choose". Consumed by the force-weapon
+	// hook, so no engine function pointer is ever rewritten.
+	int SpecialActionWeaponIndex;
+	// How many shots of the forced burst still have to be fired. The slot is
+	// dropped once this reaches zero so the unit returns to normal behaviour.
+	int SpecialActionBurstShotsLeft;
+	// Set while the ability's own "Unload" request is the thing driving
+	// Mission::Unload. The engine routes both the deploy command and a passenger
+	// unload through that single mission, so the unit type's deploy keys
+	// (Deploy.SkipPassengerUnload / Deploy.NoPassenger) cannot tell the two apart.
+	// This marker lets the 0x73D63B hook keep the ability's request a passenger
+	// release while the deploy command keeps whatever the type asks for.
+	// Deliberately NOT serialized: a mission does not survive a save/load, and
+	// leaving it out keeps the savegame layout untouched.
+	bool SpecialActionUnloading;
+
+	// The weapon that most recently delivered a Temporal=yes warhead from this unit,
+	// recorded when its bullet detonates. The engine derives a Temporal warp's erase
+	// rate from the techno's "current" weapon selection rather than from the weapon
+	// that actually hit, and those are not the same thing: a Temporal warhead fired
+	// from a slot the engine never selects - for example through the Weapon ability's
+	// forced slot, which is released as soon as the burst ends - would otherwise erase
+	// at the speed of an unrelated weapon. Consumed by Phobos' own replacement for
+	// TemporalClass::GetWarpPerStep.
+	// Deliberately NOT serialized: it is only meaningful while a warp is running, and
+	// leaving it out keeps the savegame layout untouched.
+	WeaponTypeClass* TemporalWarpWeapon;
 
 	// cache tint values
 	int TintColorOwner;
@@ -88,6 +178,13 @@ public:
 
 	bool PreventCrewEscape;
 
+	// --- SweepFire ---
+	// Sweeps currently in progress. An empty vector means this techno is not
+	// sweeping, which is the check the per-frame update short-circuits on.
+	std::vector<SweepFireInstance> Sweeps;
+	// Frames between the end of a sweep and the start of the next one.
+	CDTimerClass SweepFireCooldownTimer;
+
 	TechnoExt(TechnoClass* OwnerObject) : RadioExt(OwnerObject)
 		, TypeExtData { nullptr }
 		, Shield {}
@@ -108,6 +205,8 @@ public:
 		, CanCloakDuringRearm { false }
 		, WHAnimRemainingCreationInterval { 0 }
 		, LastWeaponType {}
+		, LastWeaponFLH {}
+		, TrajectoryGroup {}
 		, FiringObstacleCell {}
 		, IsDetachingForCloak { false }
 		, BeControlledThreatFrame { 0 }
@@ -121,6 +220,12 @@ public:
 		, CurrentDelayedFireAnim { nullptr }
 		, AttachedEffectInvokerCount { 0 }
 		, IsSelected { false }
+		, SpecialActionTimer {}
+		, LastSpecialActionFrame { -1 }
+		, SpecialActionWeaponIndex { -1 }
+		, SpecialActionBurstShotsLeft { 0 }
+		, SpecialActionUnloading { false }
+		, TemporalWarpWeapon { nullptr }
 		, TintColorOwner { 0 }
 		, TintColorAllies { 0 }
 		, TintColorEnemies { 0 }
@@ -137,6 +242,8 @@ public:
 		, DropCrate { -1 }
 		, DropCrateType { Powerup::Money }
 		, PreventCrewEscape { false }
+		, Sweeps {}
+		, SweepFireCooldownTimer {}
 	{ }
 
 	void OnEarlyUpdate();
@@ -171,6 +278,38 @@ public:
 	void UpdateRecountBurst();
 	void UpdateRearmInEMPState();
 	void UpdateRearmInTemporal();
+
+	// --- SweepFire ---
+	// Starts a sweep for a shot that is about to be fired. Returns the cell the
+	// engine must aim that shot at, or nullptr when no sweep was started and the
+	// shot should behave as a normal single shot.
+	CellClass* TryStartSweepFire(WeaponTypeClass* pWeapon, int weaponIndex, AbstractClass* pTarget, int burstIndex, CoordStruct* pLineStartOut = nullptr);
+	// Advances every sweep of this techno by one frame, firing follow-up shots.
+	void UpdateSweepFire();
+	// Re-resolves a sweep's world-space segment from its virtual offsets. Runs once per frame
+	// before the follow-up shots and does nothing unless SweepFire.AttachToTarget (move the
+	// anchor with the live target) or SweepFire.UpdateDirection (turn the line with the firer)
+	// asked for it. The line's length is invariant, so the sweep's schedule stays valid.
+	void RefreshSweepLine(SweepFireInstance& sweep, WeaponTypeClass* pWeapon);
+	// Fires one follow-up shot of a sweep at the current aim point. Returns false
+	// on allocation failure, which stops the sweep safely. A non-negative
+	// distanceOverride aims the shot that far along the line instead of at the
+	// point the sweep timer has reached (used for SweepFire.ShotAtEnd).
+	bool FireSweepShot(SweepFireInstance& sweep, WeaponTypeClass* pWeapon, double distanceOverride = -1.0);
+	// Finds the sweep belonging to a Burst slot, or nullptr.
+	SweepFireInstance* FindSweep(int burstIndex);
+	// Rearm time a sweep needs (its duration plus the cooldown), or -1 when the
+	// shot that just fired does not finish a sweep. Consumed by the rearm hook so
+	// the engine accounts for a whole sweep as a single long shot.
+	int GetSweepFireRearmTime(WeaponTypeClass* pWeapon);
+	// Drops every running sweep. releaseRearm also cancels the synthetic reload
+	// the sweep had claimed and clears the cooldown, so the techno is free to act
+	// again on the very next frame.
+	void AbortSweepFire(bool releaseRearm);
+	// Keeps the infantry firing sequence looping for as long as a sweep runs
+	// (SweepFire.InfantryFireAnim). No effect on other technos.
+	void UpdateInfantrySweepAnim(int weaponIndex);
+
 	void InitializeLaserTrails();
 	void InitializeAttachEffects();
 	void UpdateSelfOwnedAttachEffects();
@@ -227,8 +366,8 @@ public:
 	static Matrix3D TransformFLHForTurret(TechnoClass* pThis, Matrix3D mtx, bool isOnTurret, double factor = 1.0, int turIdx = -1);
 	static CoordStruct GetFLHAbsoluteCoords(TechnoClass* pThis, const CoordStruct& flh, bool isOnTurret = false, int turIdx = -1);
 
-	static CoordStruct GetBurstFLH(TechnoClass* pThis, int weaponIndex, bool& FLHFound);
-
+	// burstIndex < 0 means "use the techno's current Burst index".
+	static CoordStruct GetBurstFLH(TechnoClass* pThis, int weaponIndex, bool& FLHFound, int burstIndex = -1);
 	static void ChangeOwnerMissionFix(FootClass* pThis);
 	static void KillSelf(TechnoClass* pThis, AutoDeathBehavior deathOption, const std::vector<AnimTypeClass*>& pVanishAnimation, bool isInLimbo = false);
 	static void ObjectKilledBy(TechnoClass* pThis, TechnoClass* pKiller);
@@ -239,6 +378,9 @@ public:
 	static double GetCurrentArmorMultiplier(TechnoClass* pThis, TechnoTypeClass* pType, HouseClass* pSourceHouse = nullptr, WarheadTypeClass* pWarhead = nullptr);
 	static double CalculateArmorMultipliers(TechnoClass* pThis, WarheadTypeClass* pWarhead, HouseClass* pSourceHouse, bool hitAnim = false);
 	static void DrawSelfHealPips(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);
+	// Draws the SpecialAction cooldown strip. Independent of PipScale on purpose -
+	// see RulesExt::Pips_SpecialAction_* for why.
+	static void DrawSpecialActionPips(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);
 	static void DrawInsignia(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds);
 	static void ApplyGainedSelfHeal(TechnoClass* pThis);
 	static void SyncInvulnerability(TechnoClass* pFrom, TechnoClass* pTo);

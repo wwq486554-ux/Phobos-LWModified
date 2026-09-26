@@ -630,6 +630,12 @@ In `rulesmd.ini`:
 SelectCapturedKeyEnabled=false    ; boolean
 ```
 
+### `[ ]` Special Action
+
+- Triggers the [SpecialAction](New-or-Enhanced-Logics.md#specialaction) of every currently selected object that has one configured.
+- One key handles everything, and no action needs a target. `Weapon` arms the selected units so that their next firing cycle uses the ability's weapon; they then attack normally with it. See [SpecialAction](New-or-Enhanced-Logics.md#specialaction) for details.
+- For localization add `TXT_SPECIAL_ACTION` and `TXT_SPECIAL_ACTION_DESC` into your `.csf` file.
+
 ## Loading screen
 
 - PCX files can now be used as loadscreen images.

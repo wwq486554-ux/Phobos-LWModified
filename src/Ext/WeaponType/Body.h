@@ -116,6 +116,28 @@ public:
 
 	bool SkipWeaponPicking;
 
+	// --- SweepFire ---
+	// A weapon-level sweeping fire mode. One trigger fires a whole sweep of real
+	// shots along a virtual line while the engine still accounts for it as a
+	// single shot (one ammo round, one ROF cycle, one attack order).
+	Valueable<bool> SweepFire_Enable;
+	Valueable<double> SweepFire_Speed; // Aim point movement speed along the line, in leptons per frame
+	Valueable<PartialVector2D<int>> SweepFire_SourceCoord; // Line start, relative to the target (forward/back, left/right)
+	Valueable<PartialVector2D<int>> SweepFire_TargetCoord; // Line end, relative to the target
+	Valueable<int> SweepFire_Cooldown; // Frames between the end of one sweep and the start of the next
+	Valueable<bool> SweepFire_AttachToTarget; // Keep the line centered on the live target
+	Valueable<bool> SweepFire_UpdateDirection; // Re-orient the line from the firer to the target every frame
+	Valueable<bool> SweepFire_MirrorCoord; // Mirror the line along Y for the alternating Burst shots
+	Valueable<SweepFireAimMode> SweepFire_AimMode; // How the aim point is handed to the projectile
+	Valueable<bool> SweepFire_CheckEveryShot; // Run the vanilla CanFire checks for the follow-up shots too
+	Valueable<bool> SweepFire_ShotAtEnd; // Fire one extra shot at the end of the line
+	Valueable<bool> SweepFire_InfantryFireAnim; // Keep looping the infantry firing sequence for the whole sweep
+	// Diagnostic switch, valid for ANY weapon, sweeping or not: logs this weapon's shots with the
+	// same fields the sweep trace uses (`start` = launch state, `impact` = the frame the engine's
+	// own cell rule sets the shot off). That makes the same projectile measurable with the sweep
+	// on and off, which is how the two can be compared without guessing.
+	Valueable<bool> SweepFire_ControlProbe;
+
 	Nullable<bool> CylinderRangefinding;
 	
 	WeaponTypeExt(WeaponTypeClass* OwnerObject) : AbstractTypeExt(OwnerObject)
@@ -208,9 +230,31 @@ public:
 		, AttackNoThreatBuildings {}
 		, CylinderRangefinding {}
 		, Anim_Update {}
+		, SweepFire_Enable { false }
+		, SweepFire_Speed { 40.0 }
+		, SweepFire_SourceCoord { { 0, 0 } }
+		, SweepFire_TargetCoord { { 0, 0 } }
+		, SweepFire_Cooldown { 0 }
+		, SweepFire_AttachToTarget { false }
+		, SweepFire_UpdateDirection { false }
+		, SweepFire_MirrorCoord { true }
+		, SweepFire_AimMode { SweepFireAimMode::Auto }
+		, SweepFire_CheckEveryShot { false }
+		, SweepFire_ShotAtEnd { false }
+		, SweepFire_InfantryFireAnim { true }
+		, SweepFire_ControlProbe { false }
 	{ }
 
 	int GetBurstDelay(int burstIndex) const;
+	// Single guard point for the SweepFire feature: the weapon must have opted in
+	// and must not be one of the weapon types that never spawn a projectile
+	// (IsSonic / DiskLaser), which cannot be swept.
+	bool IsSweepFireEnabled() const;
+
+	// Single switch for the SweepFire diagnostics: true once any weapon asked for them with
+	// SweepFire.ControlProbe=yes. Every probe site checks this, so a game without that key
+	// produces no SweepFire probe output at all, whatever it sweeps.
+	static bool SweepFireProbeRequested();
 	bool HasRequiredAttachedEffects(TechnoClass* pTechno, TechnoClass* pFirer) const;
 	bool IsHealthInThreshold(TechnoClass* pTarget) const;
 	bool IsVeterancyInThreshold(TechnoClass* pTarget) const;

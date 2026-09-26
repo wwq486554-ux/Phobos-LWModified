@@ -83,6 +83,18 @@ public:
 	std::vector<CoordStruct> ExtraTurretOffsets;
 	Valueable<int> BurstPerTurret;
 
+	// Weapon slots (0-based, same numbering as NoAmmoWeapon / GetWeapon) that are aimed by turning
+	// the hull only: the turret stays locked to the hull instead of tracking the target.
+	// A value of -1 inside the list means "every slot".
+	ValueableVector<int> BodyWeapon;
+
+	// Whether the weapon in slot `weaponIndex` is aimed by the hull.
+	bool IsBodyWeapon(int weaponIndex) const
+	{
+		return weaponIndex >= 0 && !this->BodyWeapon.empty()
+			&& (this->BodyWeapon.Contains(-1) || this->BodyWeapon.Contains(weaponIndex));
+	}
+
 	explicit UnitTypeExt(UnitTypeClass* const OwnerObject) : TechnoTypeExt(OwnerObject)
 		, SinkSpeed {}
 		, Sinkable {}
@@ -143,6 +155,7 @@ public:
 		, ExtraTurretCount { 0 }
 		, ExtraTurretOffsets { }
 		, BurstPerTurret { 0 }
+		, BodyWeapon { }
 	{ }
 
 	UnitTypeClass* OwnerObject() const

@@ -676,6 +676,10 @@ This page lists all the individual contributions to the project by their author.
   - Fix the bug that `DeploysInto` and `UndeploysInto` will make damaged techno lose 1 health
   - RA1-Style multi-turret and multi-barrel
   - Fix the issue of Ares' EMP not suspending the production of AI factories
+  - New trajectory system with general functions
+  - New Missile/Engrave/Tracing trajectory
+  - Projectile life cycle logic and retargeting logic
+  - Projectile release warheads and weapons
 - **Noble Fish**:
   - Documentation maintenance
   - Chinese documentation maintenance and translation
@@ -934,3 +938,14 @@ This page lists all the individual contributions to the project by their author.
   - Add `ClampToScreen` tag for `BannerType` to control whether banner position is clamped to the visible area
 - **obsidianus** - Automatic conversion based on health
 - **Nuke** - Reload speed adjustment on promotion
+- **laowang**:
+  - Per-weapon firing animation group selection for infantry
+  - Reworked the `IsLocomotor=yes` (locomotor weapon) mechanism: every `Locomotor=` GUID now releases its victim properly instead of leaving it permanently unable to move, `DropPod` no longer crashes the game, and the whole behaviour is configurable through the new `LocomotorWeapon.*` warhead keys
+  - SweepFire: a weapon level sweeping fire mode that fires a whole series of real, individually interceptable shots along a configurable line while the engine still accounts for it as a single shot
+  - BodyWeapon: vehicle weapon slots that are aimed by turning the hull instead of the turret, by locking the turret to the hull
+  - SpecialAction: unit-triggered active abilities with their own cooldown, optional per-unit super weapon, cooldown pips and an `AttachEffect` release action
+  - AdvancedAircraftMissions: aircraft loiter over their destination instead of returning to base, with `circle`/`hover` modes, plus a manual return that speeds up the cruise home
+  - Fix `Temporal=yes` warheads being restricted to a unit's first weapon slot
+  - Fix scatter behaviour for laser, electric bolt and rad beam weapons
+  - Allow engineers to attack with their regular weapon
+  - `Trajectory.Engrave.FiringAnim` for a continuous firing animation on the Engrave trajectory

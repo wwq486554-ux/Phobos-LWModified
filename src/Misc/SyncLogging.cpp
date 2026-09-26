@@ -21,6 +21,7 @@ SyncLogEventBuffer<TargetChangeSyncLogEvent, TargetChanges_Size> SyncLogger::Tar
 SyncLogEventBuffer<TargetChangeSyncLogEvent, DestinationChanges_Size> SyncLogger::DestinationChanges;
 SyncLogEventBuffer<MissionOverrideSyncLogEvent, MissionOverrides_Size> SyncLogger::MissionOverrides;
 SyncLogEventBuffer<AnimCreationSyncLogEvent, AnimCreations_Size> SyncLogger::AnimCreations;
+SyncLogEventBuffer<LocomotorWeaponSyncLogEvent, LocomotorWeaponEvents_Size> SyncLogger::LocomotorWeaponEvents;
 
 void __forceinline MakeCallerRelative(unsigned int& caller)
 {
@@ -91,6 +92,35 @@ void SyncLogger::AddMissionOverrideSyncLogEvent(AbstractClass* pObject, int miss
 	SyncLogger::MissionOverrides.Add(MissionOverrideSyncLogEvent(pObject->WhatAmI(), pObject->UniqueID, mission, callerAddress, Unsorted::CurrentFrame));
 }
 
+void SyncLogger::AddLocomotorWeaponSyncLogEvent(AbstractClass* pObject, int mode, bool begin, unsigned int callerAddress)
+{
+	if (!pObject)
+		return;
+
+	MakeCallerRelative(callerAddress);
+	SyncLogger::LocomotorWeaponEvents.Add(LocomotorWeaponSyncLogEvent(
+		pObject->WhatAmI(), pObject->UniqueID, mode, begin, callerAddress, Unsorted::CurrentFrame));
+}
+
+void SyncLogger::WriteLocomotorWeaponEvents(FILE* const pLogFile, int frameDigits)
+{
+	fprintf(pLogFile, "Locomotor weapon events:\n");
+
+	for (size_t i = 0; i < SyncLogger::LocomotorWeaponEvents.Size(); i++)
+	{
+		auto const& locoWeaponEvent = SyncLogger::LocomotorWeaponEvents.Get();
+
+		if (!locoWeaponEvent.Initialized)
+			continue;
+
+		fprintf(pLogFile, "#%05d: Type: %2d | ID: %08x | Mode: %d | %s | Caller: %08x | Frame: %*d\n",
+			i, static_cast<int>(locoWeaponEvent.Type), locoWeaponEvent.ID, locoWeaponEvent.Mode,
+			locoWeaponEvent.Begin ? "Begin" : "End", locoWeaponEvent.Caller, frameDigits, locoWeaponEvent.Frame);
+	}
+
+	fprintf(pLogFile, "\n");
+}
+
 void SyncLogger::AddAnimCreationSyncLogEvent(const CoordStruct& coords, unsigned int callerAddress)
 {
 	if (coords.X > SyncLogger::AnimCreations_HighestX)
@@ -128,6 +158,7 @@ void SyncLogger::WriteSyncLog(const char* logFilename)
 		WriteTargetChanges(pLogFile, frameDigits);
 		WriteDestinationChanges(pLogFile, frameDigits);
 		WriteAnimCreations(pLogFile, frameDigits);
+		WriteLocomotorWeaponEvents(pLogFile, frameDigits);
 		WriteTeams(pLogFile);
 
 		fclose(pLogFile);

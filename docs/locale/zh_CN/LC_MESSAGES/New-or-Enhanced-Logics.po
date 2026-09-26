@@ -7289,3 +7289,57 @@ msgid ""
 "the weapon to be able to fire at cells containing no TechnoTypes."
 msgstr "`CanTarget` 要求明确列出 `all` 或 `empty` 才能对不包含任何科技类型的单元格开火。"
 
+
+msgid "Locomotor weapon"
+msgstr "磁电吸人武器"
+
+msgid "In vanilla, only the `Jumpjet` locomotor ever cleans up after an `IsLocomotor=yes` warhead. The victim is flagged as being attacked by a locomotor, and for every other `Locomotor=` value that flag is never cleared, so the victim can never move or accept orders again; `DropPod` additionally crashes the game. Now every `Locomotor=` GUID is driven and released properly, and the GUIDs vanilla cannot handle at all get a custom implementation."
+msgstr "在原版中，只有 `Jumpjet` 运动模式会清理 `IsLocomotor=yes` 弹头留下的状态。目标会被标记为\"正被运动模式攻击\"，而对其它任何 `Locomotor=` 值，该标志永远不会被清除，于是目标再也无法移动或接受命令；`DropPod` 还会直接导致游戏崩溃。现在每个 `Locomotor=` GUID 都能被正确驱动与释放，原版完全无法处理的 GUID 也有了自定义实现。"
+
+msgid "`LocomotorWeapon.Mode` selects how the target is moved. `auto` (default) derives it from the warhead's `Locomotor=`: `Jumpjet` keeps the vanilla behaviour, `DropPod` becomes `meteor`, every other GUID becomes `mover` (the requested vanilla locomotor drives the victim). `mover`, `meteor`, `air`, `warp` and `hold` can be requested explicitly, in which case the GUID is ignored."
+msgstr "`LocomotorWeapon.Mode` 选择目标的移动方式。`auto`（默认）依据弹头的 `Locomotor=` 推导：`Jumpjet` 保持原版行为，`DropPod` 变为 `meteor`，其它所有 GUID 变为 `mover`（由所请求的原版运动模式驱动目标）。也可以显式指定 `mover`、`meteor`、`air`、`warp` 和 `hold`，此时忽略 GUID。"
+
+msgid "`LocomotorWeapon.Speed` is the horizontal speed in leptons per frame. Defaults to the target's own `Speed`."
+msgstr "`LocomotorWeapon.Speed` 为水平移动速度，单位为 Lepton／帧。默认取目标自身的 `Speed`。"
+
+msgid "`LocomotorWeapon.Height` is the target altitude in leptons for `air` and `meteor`."
+msgstr "`LocomotorWeapon.Height` 为 `air` 与 `meteor` 模式的目标高度，单位为 Lepton。"
+
+msgid "`LocomotorWeapon.ClimbRate` and `LocomotorWeapon.DescendRate` are the vertical speeds in leptons per frame."
+msgstr "`LocomotorWeapon.ClimbRate` 与 `LocomotorWeapon.DescendRate` 为垂直升降速度，单位为 Lepton／帧。"
+
+msgid "`LocomotorWeapon.StopDistance` keeps the victim that many leptons away from the firer."
+msgstr "`LocomotorWeapon.StopDistance` 使目标在距离发射者该数值（Lepton）处停住。"
+
+msgid "`LocomotorWeapon.Duration` is the total lock duration in frames, `-1` (default) meaning 'until the firer lets go'. For `warp` it is the delay before the teleport instead."
+msgstr "`LocomotorWeapon.Duration` 为锁定的总时长（帧），`-1`（默认）表示\"直到发射者松手\"。对 `warp` 而言它表示瞬移前的延迟。"
+
+msgid "`LocomotorWeapon.EndOnArrival` ends the effect as soon as the destination is reached instead of holding the victim there."
+msgstr "`LocomotorWeapon.EndOnArrival` 设置到达目的地后立刻结束效果，而不是把目标继续锁在那里。"
+
+msgid "`LocomotorWeapon.ReleaseOnFirerStop` can keep the victim locked after the firer lets go. Only meaningful together with a finite `Duration`, otherwise the victim would stay locked forever."
+msgstr "`LocomotorWeapon.ReleaseOnFirerStop` 可让发射者松手后目标仍保持锁定。只有配合有限的 `Duration` 才有意义，否则目标会被永久锁定。"
+
+msgid "`LocomotorWeapon.FallingDamage` controls whether landing damage is applied at all."
+msgstr "`LocomotorWeapon.FallingDamage` 控制是否结算落地伤害。"
+
+msgid "`LocomotorWeapon.MeteorDamage` overrides the impact damage. `-1` (default) derives it from the drop height and `[General] -> FallingDamageMultiplier`, the way the engine computes vanilla falling damage."
+msgstr "`LocomotorWeapon.MeteorDamage` 覆盖落地伤害。`-1`（默认）由下落高度与 `[General] -> FallingDamageMultiplier` 推导，与原版坠落伤害的算法一致。"
+
+msgid "`LocomotorWeapon.Anim` and `LocomotorWeapon.MeteorAnim` are the animations played when warping and on meteor impact."
+msgstr "`LocomotorWeapon.Anim` 与 `LocomotorWeapon.MeteorAnim` 分别为瞬移时与陨石落地时播放的动画。"
+
+msgid "`LocomotorWeapon.AllowedTypes` and `LocomotorWeapon.DisallowedTypes` restrict which targets the warhead may affect; a disallowed hit does nothing at all."
+msgstr "`LocomotorWeapon.AllowedTypes` 与 `LocomotorWeapon.DisallowedTypes` 限制该弹头可以影响哪些目标；被禁止的命中不会产生任何效果。"
+
+msgid "`LocomotorWeapon.EndAction` is reserved. Every mode already implies its own ending."
+msgstr "`LocomotorWeapon.EndAction` 为保留键。每种模式都已经隐含了自己的收尾方式。"
+
+msgid "`IsLocomotor=yes` remains the only entry point and there is no global switch. Writing the `Jumpjet` GUID back into `Locomotor=` restores the vanilla behaviour exactly."
+msgstr "`IsLocomotor=yes` 仍是唯一入口，没有全局开关。把 `Jumpjet` 的 GUID 写回 `Locomotor=` 即可完全恢复原版行为。"
+
+msgid "Like in vanilla, only Unit and Aircraft targets that are not in the air can be affected."
+msgstr "与原版一致，只有不在空中的载具与飞机目标会受影响。"
+
+msgid "Once the effect ends the victim always gets its original locomotor back and is able to move and accept orders again."
+msgstr "效果结束后，目标总会恢复原本的运动模式，并能重新移动与接受命令。"

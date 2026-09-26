@@ -12,7 +12,12 @@
 #include <Utilities/Helpers.Alex.h>
 #include <Utilities/AresHelper.h>
 #include <Utilities/AresFunctions.h>
+#include <Utilities/Debug.h>
 #include <Misc/FlyingStrings.h>
+
+// Diagnostics for the LocomotorWeapon ("magnetron") locomotor; see
+// LocomotorWeapon::TrackVictim in LocomotorWeaponLocomotionClass.cpp.
+#include <Locomotion/LocomotorWeaponLocomotionClass.h>
 
 #pragma region GetTechnoType
 
@@ -32,6 +37,32 @@ DEFINE_HOOK(0x6F9E50, TechnoClass_AI, 0x5)
 	GET(TechnoClass*, pThis, ECX);
 
 	TechnoExt::Fetch(pThis)->OnEarlyUpdate();
+
+	// LocomotorWeapon diagnostics: keep an eye on a victim for a while after the
+	// magnetron locomotor let go of it, so that a bug report shows whether its
+	// health ever moves while the player shoots at it. See TrackVictim.
+	// Compiled out unless LocomotorWeapon::Diagnostics is on.
+	if constexpr (LocomotorWeapon::Diagnostics)
+	{
+		bool probeDue = false;
+
+		if (LocomotorWeapon::IsTrackedVictim(pThis, &probeDue) && probeDue)
+		{
+			// Victims are always FootClass (Unit/Aircraft); the locomotor flags live
+			// there and not on TechnoClass.
+			FootClass* const pFoot = generic_cast<FootClass*, true>(pThis);
+
+			Debug::Log("[LocomotorWeapon] Probe: target=%s health=%d estimated=%d ic=%d icLeft=%d fs=%d warpedOut=%d warpingOut=%d temporalTargetingMe=%s z=%d height=%d inAir=%d attacked=%d letgo=%d manip=%d crash=%d falling=%d frozen=%d source=%s\n",
+				LocomotorWeapon::TechnoLabel(pThis), pThis->Health, pThis->EstimatedHealth,
+				pThis->IsIronCurtained(), pThis->IronCurtainTimer.TimeLeft, pThis->ForceShielded,
+				pThis->BeingWarpedOut, pThis->WarpingOut,
+				LocomotorWeapon::PointerLabel(pThis->TemporalTargetingMe),
+				pThis->GetCoords().Z, pThis->GetHeight(), pThis->IsInAir(),
+				pFoot ? pFoot->IsAttackedByLocomotor : 0, pFoot ? pFoot->IsLetGoByLocomotor : 0,
+				pThis->IsBeingManipulated, pThis->IsCrashing, pThis->IsFallingDown,
+				pFoot ? pFoot->FrozenStill : 0, LocomotorWeapon::PointerLabel(pThis->LocomotorSource));
+		}
+	}
 
 	return 0;
 }
@@ -2272,7 +2303,27 @@ int WarpPerStep::TemporalClassFake::_GetWarpPerStep(int helperCount)
 		else
 			weaponIdx = pOwner->SelectWeapon(nullptr);
 		
-		const auto pWeapon = pOwner->GetWeapon(weaponIdx)->WeaponType;
+		auto pWeapon = pOwner->GetWeapon(weaponIdx)->WeaponType;
+
+		// The weapon picked above is the owner's *current* selection, which is not
+		// necessarily the one that started this warp. A Temporal warhead fired from a
+		// slot the engine never selects - the Weapon ability's forced slot, released as
+		// soon as its burst ends, is the usual case - leaves the selection pointing at
+		// an unrelated weapon, and the warp then erases at that weapon's damage instead
+		// of the one that actually hit. When the selection carries no Temporal warhead
+		// but this unit did deliver one, prefer the weapon that delivered it. A
+		// selection that is already Temporal is left alone, so nothing relying on it
+		// (Ares' WeaponIndex_Warp included) changes behaviour.
+		if (RulesExt::Global()->TemporalWeapon_AnySlot
+			&& (!pWeapon || !pWeapon->Warhead || !pWeapon->Warhead->Temporal))
+		{
+			if (auto const pOwnerExt = TechnoExt::TryFetch(pOwner))
+			{
+				if (auto const pRecorded = pOwnerExt->TemporalWarpWeapon)
+					pWeapon = pRecorded;
+			}
+		}
+
 		int warpPerStep = pWeapon->Damage;
 
 		if (const auto pWarhead = pWeapon->Warhead)

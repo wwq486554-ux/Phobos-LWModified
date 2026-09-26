@@ -21,7 +21,11 @@
 // The current pre-release being prepared, spelled out in full rather than as a number, so that
 // it can be anything semantic versioning allows - "alpha5", "beta1", "rc3", etc. Its presence is
 // what makes a release build a pre-release; comment it out for a stable release.
-#define PRERELEASE_SUFFIX "alpha1"
+//
+// NOTE (unofficial fork): the "-pbsnew" suffix is added by the Phobos-LWModified fork so that its
+// builds are distinguishable from official Phobos builds in logs, crash reports and file metadata.
+// It is the only change this fork makes to this header.
+#define PRERELEASE_SUFFIX "alpha1-pbsnew1"
 
 #pragma endregion
 

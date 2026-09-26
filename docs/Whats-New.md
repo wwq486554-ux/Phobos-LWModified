@@ -126,6 +126,9 @@ You can use the migration utility (can be found on [Phobos supplementaries repo]
 - `AnimList.ShowOnZeroDamage` has been renamed to `CreateAnimsOnZeroDamage` to make it more clear it applies to both `AnimList` and splash animations.
 - INI inclusion and inheritance are now turned off by default and need to be turned on via command line flags `-Include` and `-Inheritance`.
 - `Level=true` projectiles no longer attempt to do reposition against targets that are behind non-water tiles by default. Use `SubjectToLand=true` to re-enable this behaviour.
+- Units' `LaserTrails` will no longer lag behind by one frame, so it needs to be repositioned (Previously, units with faster speeds may need to be positioned further ahead).
+- Aircraft's weapon with `Trajectory` projectile will no longer make `Strafing` default to true.
+- `Trajectory.Straight.TargetSnapDistance` and other similar keys have been renamed to some more universal name like `Trajectory.TargetSnapDistance`. You can view detailed content in [Projectile trajectories](New-or-Enhanced-Logics.md#Projectile-trajectories).
 ```
 
 ### 0.3
@@ -419,7 +422,33 @@ HideShakeEffects=false           ; boolean
 :open:
 
 #### New:
+- [SweepFire](New-or-Enhanced-Logics.md#sweepfire) (by laowang)
+  - One trigger fires a whole series of real shots along a configurable line while the engine accounts for it as a single shot, so ammo, `ROF` and `Burst` stay vanilla.
+  - Each follow-up shot is a real projectile with its own trajectory, warhead and effects, and can be intercepted individually.
+  - `SweepFire.MirrorCoord` makes a multi-barrel weapon, such as `Burst=2`, sweep from both muzzles in opposite directions.
+  - `SweepFire.AttachToTarget` and `SweepFire.UpdateDirection` make the line follow the target and the firer respectively, the same way the `Trajectory.Engrave` keys of those names do. Neither changes the length of the line, so the number of shots and their spacing stay the same.
+- [SpecialAction](New-or-Enhanced-Logics.md#specialaction) (by laowang)
+  - `SpecialAction.SuperWeaponSource=unit` lets the ability carry its own super weapon, so it no longer has to be granted to every house with `AlwaysGranted=yes`. In that mode `SpecialActionROF` is the only cooldown.
+  - The `SuperWeapon` action now also honours Ares' `SW.Inhibitors` / `SW.Designators`, which the sidebar applies but a direct launch would otherwise skip.
+  - `Pips.SpecialAction.*` draws a dedicated cooldown indicator strip on the unit, independent of `PipScale`, so a long ability cooldown is visible at a glance.
+  - The `Unload` action is exempt from the type level `Deploy.SkipPassengerUnload` / `Deploy.NoPassenger` keys and refuses to run on a unit with no passengers, so a vehicle that deploys without first dropping its passengers can still release them with the ability.
+  - The `AttachEffect` action releases a predefined Attach Effect on the unit itself, and can also strip listed effects. It is exempt from elite upgrades and never targets other objects.
+- [Per-weapon firing animation selection](New-or-Enhanced-Logics.md#per-weapon-firing-animation-selection) (by laowang)
+- [Locomotor weapon](New-or-Enhanced-Logics.md#locomotor-weapon) (by laowang)
+  - `IsLocomotor=yes` warheads no longer leave their victim permanently unable to move when the `Locomotor=` GUID is anything other than `Jumpjet`, and `DropPod` no longer crashes the game. The victim always gets its original locomotor back once the effect ends.
+  - `LocomotorWeapon.Mode` can drive the victim with the requested vanilla locomotor (`mover`), or lift it into the air (`air`), teleport it (`warp`), pin it in place (`hold`) or drop it like a meteor (`meteor`), with `auto` deriving the mode from the `Locomotor=` GUID.
+  - New `LocomotorWeapon.*` keys on WarheadType control speed, altitude, climb/descend rates, stop distance, duration, end-on-arrival, release behaviour, falling/impact damage, animations and target type filters.
+- [Body-aimed weapons](New-or-Enhanced-Logics.md#body-aimed-weapons) (by laowang)
+  - `BodyWeapon` on a VehicleType lists weapon slots that cannot use the turret: for those slots the turret is locked to the hull and the vehicle has to turn its body towards the target before firing, just like a vehicle without a turret.
+  - Slots use the same 0-based numbering as `NoAmmoWeapon` and can be listed as `BodyWeapon=0,1`; `-1` means every slot.
+  - Multi-turret vehicles are supported (all turrets share one facing, so they lock together). The vanilla `WeaponXTurretLocked` art tag is left untouched.
+- [Guided spawned missiles (`Missile.Homing`)](New-or-Enhanced-Logics.md#guided-spawned-missiles)
 - [Allow using waypoints, area guard and attack move with aircraft](Fixed-or-Improved-Logics.md#extended-aircraft-missions) (by CrimRecya)
+- [Advanced Aircraft Missions: loiter on arrival and boosted manual return](Fixed-or-Improved-Logics.md#advanced-aircraft-missions)
+  - Aircraft loiter over their destination instead of returning to base, with a configurable radius, and can orbit the last known position of a destroyed target.
+  - `AdvancedAircraftMissions.LoiterMode` picks between `circle` (orbit, the default) and `hover` (hold position like a helicopter), independently of whether the aircraft searches for targets.
+  - `AdvancedAircraftMissions.HoverBrakeRange` sets how far from its hover point a hovering aircraft starts braking (4 cells by default), clamped to at least 1.2x its own turning radius.
+  - New `SpecialAction=Return` action and right-clicking the unit's own airfield both order a return regardless of ammo and speed up the cruise home; the two triggers share one cooldown.
 - [Enhanced Straight trajectory](New-or-Enhanced-Logics.md#straight-trajectory) (by CrimRecya)
 - [Enable building production queue](User-Interface.md#building-production-queue) (by CrimRecya)
 - [Custom exit cell for infantry factory](Fixed-or-Improved-Logics.md#custom-exit-cell-for-infantry-factory) (by Starkku)
@@ -681,6 +710,12 @@ HideShakeEffects=false           ; boolean
 - [Reload speed adjustment on promotion](New-or-Enhanced-Logics.md#reload-speed-adjustment-on-promotion) (by Nuke)
 - Allowed customizing the default value of `[Warhead] -> PreventScatter` via `[CombatDamage] -> Warhead.PreventScatter` (by Noble_Fish)
 - Allowed `(Pre)ProductionAnim` animations to use `Powered` & `PoweredLight/Effect/Special` keys (by Noble_Fish)
+- New Missile trajectory (by CrimRecya)
+- New Engrave trajectory (by CrimRecya)
+- New Tracing trajectory (by CrimRecya)
+- New trajectory system with general functions (by CrimRecya)
+- Projectile life cycle logic and retargeting logic (by CrimRecya)
+- Projectile release warheads and weapons (by CrimRecya)
 
 #### Vanilla fixes:
 - Fixed sidebar not updating queued unit numbers when adding or removing units when the production is on hold (by CrimRecya)
@@ -731,6 +766,7 @@ HideShakeEffects=false           ; boolean
 - Fixed an issue that the AI would look for the first house in the array as an enemy instead of the nearest one when there were no enemies (by TaranDahl)
 - Fixed the issue that weapon selection don't check if secondary's warhead has `IsLocomotor=yes` (by NetsuNegi)
 - Fixed the issue that warhead with `IsLocomotor=yes` can be used to vehicles who is in tank bunker (by NetsuNegi)
+- Fixed `Temporal=yes` warheads being restricted to a unit's first weapon slot: they no longer crash the game when delivered through any other slot, and they now erase their target at the damage of the weapon that actually fired them instead of the unit's current weapon selection (by laowang)
 - Fixed an issue where miners affected by `Passengers/DeployFire` were unable to unload minerals (by FlyStar)
 - Fixed an issue where mining vehicles could not move after leaving a tank bunker (by FlyStar)
 - Fixed the bug where selected technos would lose their selection if their regular mind control was replaced with permanent mind control or with the control from the Psychic Dominator superweapon (by NetsuNegi)

@@ -15,6 +15,10 @@ This page describes all ingame logics that are fixed or improved in Phobos witho
 - Fixed the bug when units are already dead but still in map (for sinking, crashing, dying animation, etc.), they could die again.
 - Fixed the bug when cloaked Desolator was unable to fire his deploy weapon.
 - Fixed the bug that temporaryed unit cannot be erased correctly and no longer raise an error.
+- Fixed `Temporal=yes` warheads being usable from a unit's first weapon slot only.
+  - The engine creates a techno's Temporal instance at initialization from its first weapon slot's warhead alone, and the detonation code then calls `TemporalClass::Fire` on that instance without checking whether it exists. A Temporal warhead reaching a unit through any other slot - or through a weapon that never entered the type's slots, such as an `AirburstWeapon` - therefore read a null pointer and crashed the game. The instance is now created on demand the first time such a warhead detonates.
+  - Such a warhead also erased its target at the wrong speed. The engine works the warp's per-step damage out from the techno's *current* weapon selection rather than from the weapon that actually hit, so a Temporal warhead fired from a slot the engine never selects erased at an unrelated weapon's `Damage`. The warp now uses the weapon that delivered the warhead whenever the engine's own selection is not a Temporal weapon, and leaves that selection alone otherwise.
+  - Both fixes can be disabled by setting `[General] -> TemporalWeapon.AnySlot=no` in `rulesmd.ini`, which restores the vanilla behaviour, crash included.
 - Fixed building and defense tab hotkeys not enabling the placement mode after *Cannot build here.* triggered and the placement mode cancelled.
 - Fixed buildings with `UndeployInto` playing `EVA_NewRallypointEstablished` on undeploying.
 - Fixed buildings with `Naval=yes` ignoring `WaterBound=no` to be forced to place onto water.
@@ -912,6 +916,90 @@ ExtendedAircraftMissions.UnlandDamage=    ; integer, default to [General] -> Ext
 
 ```{note}
 And now when `ExtendedAircraftMissions` is enabled, aircraft that can land at the airport will check at any time to see if they have a dock. Therefore, if there are aircraft in your mission that require dock and you have not provided enough or not disabled the feature, they will crash immediately
+```
+
+### Advanced Aircraft Missions
+
+- Builds on `ExtendedAircraftMissions` (which must be enabled) and is opted into per aircraft type:
+  aircraft loiter over their destination instead of returning to base, and manual returns fly home
+  faster.
+
+```ini
+[General]
+AdvancedAircraftMissions.LoiterRadius=0            ; cells; unset/<=0 = no loitering
+AdvancedAircraftMissions.LoiterMode=circle         ; circle | hover
+AdvancedAircraftMissions.HoverBrakeRange=4         ; cells; hover slows down within this distance
+AdvancedAircraftMissions.LoiterAutoTarget=yes      ; loiter searches for targets on its own
+AdvancedAircraftMissions.ReturnSpeedMultiplier=1.0 ; speed while cruising home
+AdvancedAircraftMissions.ReturnWithoutDock=deny    ; deny | loiter
+
+[SOMEAIRCRAFT]                                     ; AircraftType
+AdvancedAircraftMissions=no                        ; master switch for this type
+AdvancedAircraftMissions.LoiterRadius=             ; overrides the global default
+AdvancedAircraftMissions.LoiterMode=
+AdvancedAircraftMissions.HoverBrakeRange=
+AdvancedAircraftMissions.LoiterAutoTarget=
+AdvancedAircraftMissions.ReturnSpeedMultiplier=
+AdvancedAircraftMissions.ReturnWithoutDock=
+```
+
+- **Loitering.** With `LoiterRadius` set, an aircraft that reaches its move destination - including
+  the last node of a waypoint chain - orbits that point instead of returning to base, and an aircraft
+  that destroys its target while it still has ammo orbits the target's last known position. An
+  aircraft that is already loitering returns to its original loiter centre after a kill instead of
+  re-centring. `Ammo==0` hands the aircraft back to the vanilla return; a type with unlimited ammo
+  (`Ammo=0` on the type) is treated as always having ammo and loiters indefinitely.
+- The radius is clamped to at least the aircraft's turning radius, and it also drives the ordinary
+  `Ctrl`+`Alt` area guard hover. `LoiterAutoTarget=no` suppresses the loiter's own area search only;
+  an explicit area guard keeps its vanilla behaviour.
+- **Loiter mode.** `LoiterMode=circle` (the default) keeps the orbiting behaviour above.
+  `LoiterMode=hover` parks the aircraft in place like a helicopter instead: it slides to the nearest
+  cell centre and holds there. With `LoiterAutoTarget=yes` it still flies out to attack and then
+  returns to its hover point before settling again, so one sortie does not drag the hover point to
+  the kill site. Only `LoiterRadius` decides whether a loiter starts at all; the configured radius
+  has no further meaning in this mode. The key drives the same hover as `LoiterRadius` does, so a
+  hover type also holds position rather than circling when explicitly area-guarded. It applies to
+  every loiter the aircraft enters, including the holding pattern that `ReturnWithoutDock=loiter`
+  uses while no airfield is available.
+- **Hover braking distance.** `HoverBrakeRange` (default `4`, cells) is how far from its hover point
+  an aircraft in `LoiterMode=hover` starts slowing down: outside it the aircraft flies at full speed,
+  inside it decelerates at a constant rate (speed falls with the square root of the remaining
+  distance) and reaches zero on the point itself. Raise it for a longer, gentler glide-in; lower it
+  to brake late. The speed profile has a second, linear segment for the last stretch, with a slope
+  based on the aircraft's own turning radius instead of on `HoverBrakeRange`; that is what makes the
+  final approach converge onto the point instead of orbiting it, and it also means raising the key
+  only makes the braking start earlier - the last stretch takes the same time no matter how large
+  the value is. The value is clamped to at least `1` cell and to at least 1.2x the aircraft's own
+  turning radius, so a value that visibly degrades into a small orbit is being clamped away rather
+  than silently accepted. The key only affects `LoiterMode=hover`; `circle` and the boosted manual
+  return ignore it.
+- A hovering aircraft that is ordered to move to the cell it is already parked on simply keeps
+  hovering - the order is not turned into a return to base.
+- `LoiterRadius` is a soft target rather than a hard circle. The hover reuses the area guard's
+  sideways-offset steering, so the circle an aircraft can actually fly is bounded by its own turning
+  radius (`Speed` divided by its facing rotation rate). Once the configured radius is well above
+  that, raising it further no longer changes the visible circle - lower `Speed` or raise `ROT` on
+  the type if a genuinely wider orbit is wanted.
+- Aircraft with `Locomotor=Fly` have no banking/rolling animation in this engine at all: the fly
+  locomotor's `Tilt_Pitch_AI` is an empty stub and its only body motion is the periodic draw-point
+  offset known as the "wobble" (see [Customize whether technos with `Locomotor=Fly` wobble](#customize-whether-technos-with-locomotor-fly-wobble)).
+  Loitering therefore looks exactly as flat as any other flight.
+- **Boosted manual return.** [SpecialAction](New-or-Enhanced-Logics.md#specialaction) `Return`, and a
+  plain right-click on the unit's own airfield, both order the aircraft home regardless of ammo and
+  multiply its speed while cruising home. Both share one `SpecialActionROF` cooldown. The boost ends
+  when the landing descent begins, on landing, or as soon as the aircraft is sent somewhere else;
+  being re-routed to another own airfield keeps it.
+- Without a usable airfield, `ReturnWithoutDock=deny` (the default) makes the ability do nothing and
+  cost no cooldown; `loiter` instead sends the aircraft into a holding pattern until a pad frees up
+  (still without a boost, since the return cannot complete). That holding pattern is an ordinary
+  loiter, so `LoiterMode` alone decides whether the aircraft orbits or hovers while it waits and
+  `ReturnWithoutDock` deliberately keeps its `deny`/`loiter` values only. `LoiterRadius` still has to
+  be set for the holding pattern to happen at all.
+
+```{note}
+The boost applies to the cruise phase only - it is removed before the landing approach, so the
+landing itself is unchanged. Airborne AI team aircraft, airstrikes, loaner aircraft and spawned
+aircraft are excluded, as with `ExtendedAircraftMissions`.
 ```
 
 ### Landing direction
@@ -2687,6 +2775,21 @@ SkipCrushSlowdown=                 ; boolean, default to [General] -> SkipCrushS
 - When a vehicle has `Passengers` and possesses `DeployFire/IsSimpleDeployer/DeploysInto`, it can perform custom deployment actions beyond merely releasing passengers.
   - `Deploy.SkipPassengerUnload` allows vehicles to bypass the passenger release process and perform other deployment actions.
   - `Deploy.NoPassenger` allows vehicles to perform other deployment actions after losing all passengers.
+  - When both are set, `Deploy.SkipPassengerUnload` takes precedence, because it is the one checked first.
+
+  ```{note}
+  Both keys are type level, so they affect **every** `Mission::Unload` the unit runs. The engine
+  uses that single mission both for deploying and for releasing passengers, so the mission by
+  itself cannot tell the two requests apart.
+
+  A [`SpecialAction`](New-or-Enhanced-Logics.md#specialaction) whose action is `Unload` is exempt
+  from both keys: the ability always performs the passenger release and ignores
+  `Deploy.SkipPassengerUnload` / `Deploy.NoPassenger`, and it does nothing at all when the unit
+  carries no passengers. The exemption is needed because otherwise
+  `Deploy.SkipPassengerUnload=true` - the natural setting for a vehicle that should deploy without
+  first dropping its passengers - would silently turn the ability into a second deploy key on
+  exactly the units where the two abilities are supposed to coexist.
+  ```
 - Harvester can now perform other deployment operations. Can't deploy when it's unloading minerals.
   - `Deploy.NoTiberium` controls whether the deployment actions can only be performed when the harvester carries no mineral. If set to false, the harvester can deploy regardless of carrying minerals or not.
 

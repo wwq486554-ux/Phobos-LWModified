@@ -432,5 +432,10 @@ DEFINE_HOOK(0x70A4FB, TechnoClass_DrawPips_SelfHealGain, 0x5)
 
 	TechnoExt::DrawSelfHealPips(pThis, pLocation, pBounds);
 
+	// The SpecialAction cooldown strip shares this hook on purpose: a second hook
+	// cannot be placed at the same address, and everything both strips need is
+	// already in hand here.
+	TechnoExt::DrawSpecialActionPips(pThis, pLocation, pBounds);
+
 	return SkipGameDrawing;
 }

@@ -5,6 +5,35 @@ InfantryTypeExt::ExtContainer InfantryTypeExt::ExtMap;
 // =============================
 // load / save
 
+// Reads one per-weapon firing animation override (Weapon%dFire).
+// Returns -1 if unset or invalid, 0 for the primary animation group (FireUp/FireProne)
+// and 1 for the secondary one (SecondaryFire/SecondaryProne).
+static int ReadWeaponFireAnimation(INI_EX& exArtINI, const char* pArtSection, const char* pSequenceSection, int nWeaponIndex)
+{
+	char key[32];
+	_snprintf_s(key, sizeof(key), "Weapon%dFire", nWeaponIndex + 1);
+
+	const char* pSection = nullptr;
+
+	if (exArtINI.ReadString(pArtSection, key) && !exArtINI.empty())
+		pSection = pArtSection;
+	else if (exArtINI.ReadString(pSequenceSection, key) && !exArtINI.empty())
+		pSection = pSequenceSection;
+	else
+		return -1;
+
+	const char* pValue = exArtINI.value();
+
+	if (!_strcmpi(pValue, "Primary") || !_strcmpi(pValue, "FireUp") || !_strcmpi(pValue, "Main") || !_strcmpi(pValue, "0"))
+		return 0;
+
+	if (!_strcmpi(pValue, "Secondary") || !_strcmpi(pValue, "SecondaryFire") || !_strcmpi(pValue, "Sub") || !_strcmpi(pValue, "1"))
+		return 1;
+
+	Debug::INIParseFailed(pSection, key, pValue, "Expected Primary or Secondary");
+	return -1;
+}
+
 void InfantryTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 {
 	TechnoTypeExt::LoadFromINIFile(pINI);
@@ -33,6 +62,33 @@ void InfantryTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->ProneSecondaryFireFLH.Read(exArtINI, pArtSection, "ProneSecondaryFireFLH");
 	this->DeployedPrimaryFireFLH.Read(exArtINI, pArtSection, "DeployedPrimaryFireFLH");
 	this->DeployedSecondaryFireFLH.Read(exArtINI, pArtSection, "DeployedSecondaryFireFLH");
+
+	// Resolve the [<image>Sequence] section so Weapon%dFire can also be put next to the sequence definitions.
+	char sequenceSection[0x20];
+
+	if (exArtINI.ReadString(pArtSection, "Sequence") && !exArtINI.empty())
+		strncpy_s(sequenceSection, exArtINI.value(), _TRUNCATE);
+	else
+		_snprintf_s(sequenceSection, sizeof(sequenceSection), "%sSequence", pArtSection);
+
+	const int weaponCount = Math::max(pThis->WeaponCount, 2);
+	this->WeaponFireAnimations.assign(weaponCount, -1);
+
+	for (int i = 0; i < weaponCount; i++)
+		this->WeaponFireAnimations[i] = ReadWeaponFireAnimation(exArtINI, pArtSection, sequenceSection, i);
+}
+
+bool InfantryTypeExt::IsSecondaryFireAnim(int nWeaponIndex) const
+{
+	if (nWeaponIndex >= 0 && static_cast<size_t>(nWeaponIndex) < this->WeaponFireAnimations.size())
+	{
+		const int value = this->WeaponFireAnimations[nWeaponIndex];
+
+		if (value >= 0)
+			return value != 0;
+	}
+
+	return this->IsSecondary(nWeaponIndex);
 }
 
 template <typename T>
@@ -55,6 +111,7 @@ void InfantryTypeExt::Serialize(T& Stm)
 		.Process(this->DeployedWeaponBurstFLHs)
 		.Process(this->EliteDeployedWeaponBurstFLHs)
 		.Process(this->InfantryAutoDeploy)
+		.Process(this->WeaponFireAnimations)
 		;
 }
 

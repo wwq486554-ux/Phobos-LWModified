@@ -69,6 +69,45 @@ int WeaponTypeExt::GetBurstDelay(int burstIndex) const
 	return burstDelay;
 }
 
+// Probes are development-only instrumentation, so they are off unless a weapon explicitly asks
+// for them. The answer is built once on first use: every weapon is loaded by the time anything
+// is fired, so no later change is possible anyway.
+bool WeaponTypeExt::SweepFireProbeRequested()
+{
+	static bool requested = false;
+	static bool built = false;
+
+	if (!built)
+	{
+		built = true;
+
+		for (const auto pWeapon : WeaponTypeClass::Array)
+		{
+			const auto pExt = pWeapon ? TryFetch(pWeapon) : nullptr;
+
+			if (pExt && pExt->SweepFire_ControlProbe)
+			{
+				requested = true;
+				break;
+			}
+		}
+	}
+
+	return requested;
+}
+
+bool WeaponTypeExt::IsSweepFireEnabled() const
+{
+	if (!this->SweepFire_Enable)
+		return false;
+
+	// IsSonic and DiskLaser never create a projectile (they play a wave / a disk
+	// laser instead), so there is nothing for a sweep to launch.
+	const auto pThis = this->OwnerObject();
+
+	return !pThis->IsSonic && !pThis->DiskLaser;
+}
+
 // =============================
 // load / save
 
@@ -202,6 +241,58 @@ void WeaponTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->CylinderRangefinding.Read(exINI, pSection, "CylinderRangefinding");
 	this->Anim_Update.Read(exINI, pSection, "Anim.Update");
 
+	// SweepFire
+	this->SweepFire_Enable.Read(exINI, pSection, "SweepFire.Enable");
+	this->SweepFire_Speed.Read(exINI, pSection, "SweepFire.Speed");
+	this->SweepFire_SourceCoord.Read(exINI, pSection, "SweepFire.SourceCoord");
+	this->SweepFire_TargetCoord.Read(exINI, pSection, "SweepFire.TargetCoord");
+	this->SweepFire_Cooldown.Read(exINI, pSection, "SweepFire.Cooldown");
+	this->SweepFire_AttachToTarget.Read(exINI, pSection, "SweepFire.AttachToTarget");
+	this->SweepFire_UpdateDirection.Read(exINI, pSection, "SweepFire.UpdateDirection");
+	this->SweepFire_MirrorCoord.Read(exINI, pSection, "SweepFire.MirrorCoord");
+	this->SweepFire_AimMode.Read(exINI, pSection, "SweepFire.AimMode");
+	this->SweepFire_CheckEveryShot.Read(exINI, pSection, "SweepFire.CheckEveryShot");
+	this->SweepFire_ShotAtEnd.Read(exINI, pSection, "SweepFire.ShotAtEnd");
+	this->SweepFire_InfantryFireAnim.Read(exINI, pSection, "SweepFire.InfantryFireAnim");
+	this->SweepFire_ControlProbe.Read(exINI, pSection, "SweepFire.ControlProbe");
+
+	if (this->SweepFire_Enable)
+	{
+		// Always echo the resolved configuration for opted-in weapons. This is the
+		// first thing to look at when a sweep does not happen in game.
+		const auto& sourceOffset = this->SweepFire_SourceCoord.Get();
+		const auto& targetOffset = this->SweepFire_TargetCoord.Get();
+		const char* pReason = "ok";
+
+		if (!this->IsSweepFireEnabled())
+			pReason = "IsSonic / DiskLaser never create a projectile";
+		else if (sourceOffset.X == 0 && sourceOffset.Y == 0 && targetOffset.X == 0 && targetOffset.Y == 0)
+			pReason = "SourceCoord and TargetCoord are both 0,0, the line has zero length";
+		else if (this->SweepFire_Speed <= 0.0)
+			pReason = "Speed is not greater than 0";
+
+		Debug::Log("[SweepFire] INI [%s]: Enable=yes usable=%d Speed=%.1f Source=(%d,%d) Target=(%d,%d) Cooldown=%d Mirror=%d AimMode=%d InfFireAnim=%d (%s)\n",
+			pSection, this->IsSweepFireEnabled() ? 1 : 0, this->SweepFire_Speed.Get(),
+			sourceOffset.X, sourceOffset.Y, targetOffset.X, targetOffset.Y,
+			this->SweepFire_Cooldown.Get(), this->SweepFire_MirrorCoord.Get() ? 1 : 0,
+			static_cast<int>(this->SweepFire_AimMode.Get()), this->SweepFire_InfantryFireAnim.Get() ? 1 : 0, pReason);
+
+		if (!this->IsSweepFireEnabled())
+		{
+			Debug::Log("[Developer warning][%s] SweepFire.Enable is set on a weapon that cannot sweep (IsSonic / DiskLaser never create a projectile). "
+				"The weapon will fire as a normal single shot.\n", pSection);
+		}
+		else if (sourceOffset.X == 0 && sourceOffset.Y == 0 && targetOffset.X == 0 && targetOffset.Y == 0)
+		{
+			Debug::Log("[Developer warning][%s] SweepFire is enabled but SweepFire.SourceCoord and SweepFire.TargetCoord are both 0,0, "
+				"which describes a zero-length line. The weapon will keep firing single shots.\n", pSection);
+		}
+		else if (this->SweepFire_Speed <= 0.0)
+		{
+			Debug::Log("[Developer warning][%s] SweepFire.Speed must be greater than 0. SweepFire is disabled for this weapon.\n", pSection);
+		}
+	}
+
 	// handle SkipWeaponPicking
 	if (this->CanTarget != AffectedTarget::All || this->CanTargetHouses != AffectedHouse::All
 		|| this->CanTarget_MaxHealth < 1.0 || this->CanTarget_MinHealth > 0.0
@@ -310,6 +401,19 @@ void WeaponTypeExt::Serialize(T& Stm)
 		.Process(this->AttackNoThreatBuildings)
 		.Process(this->CylinderRangefinding)
 		.Process(this->Anim_Update)
+		.Process(this->SweepFire_Enable)
+		.Process(this->SweepFire_Speed)
+		.Process(this->SweepFire_SourceCoord)
+		.Process(this->SweepFire_TargetCoord)
+		.Process(this->SweepFire_Cooldown)
+		.Process(this->SweepFire_AttachToTarget)
+		.Process(this->SweepFire_UpdateDirection)
+		.Process(this->SweepFire_MirrorCoord)
+		.Process(this->SweepFire_AimMode)
+		.Process(this->SweepFire_CheckEveryShot)
+		.Process(this->SweepFire_ShotAtEnd)
+		.Process(this->SweepFire_InfantryFireAnim)
+		.Process(this->SweepFire_ControlProbe)
 		;
 };
 

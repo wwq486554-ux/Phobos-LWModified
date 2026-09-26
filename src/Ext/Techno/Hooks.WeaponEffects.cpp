@@ -15,12 +15,75 @@ namespace FireAtTemp
 	AbstractClass* pOriginalTarget = nullptr;
 	AbstractClass* pWaveOwnerTarget = nullptr;
 	bool IgnoreTargetForWaveAmbientDamage = false;
+	CellClass* SweepFireAimCell = nullptr; // Set by the SweepFire hook below, consumed by the obstacle cell hook.
+	// Exact start of the line the current shot belongs to (SweepFire). The engine
+	// launches the first shot of a sweep itself, towards the cell it was aimed at,
+	// so the bullet has to be re-aimed here once it exists.
+	CoordStruct SweepFireAimCoords = CoordStruct::Empty;
+	bool SweepFireAimValid = false;
+	// The weapon that started the sweep. Stashed here because the record hook that has to
+	// re-solve the first shot's ballistic velocity only has the bullet at hand, and the
+	// bullet's own WeaponType is not guaranteed to be set that early in Fire_At.
+	WeaponTypeClass* SweepFireWeapon = nullptr;
 }
 
-DEFINE_HOOK(0x6FF08B, TechnoClass_Fire_RecordBullet, 0x6)
+// SweepFire: the first shot of a sweep is an ordinary shot whose aim point is
+// moved to the start of the line. The rest of Fire_At (animation, report, ammo,
+// ROF, Burst accounting and the projectile's own trajectory) stays untouched
+// (F2 route).
+//
+// The aim point is written into Fire_At's pTarget argument, [ebp+8], instead of
+// into a register, and it is written before anything consumes that argument:
+//
+//   * without Ares the engine loads EDX from [ebp+8] at 0x6FE554 and passes it
+//     to CreateBullet at 0x6FE55D;
+//   * with Ares, TechnoClass_Fire_CreateBullet (Ares's hook at 0x6FE53F)
+//     creates the bullet itself. It takes the target straight from the saved EBP
+//     (`mov 0x8(%eax),%ebp`) and returns 0x6FE562, skipping the whole vanilla
+//     block - including 0x6FE557, which is why hooking there never fired at all
+//     on an Ares setup.
+//
+// Hooking 0x6FE53F instead is not an option: a non-zero return short-circuits
+// the rest of the hook chain, and Ares's handler returns 0x6FE562 there, so a
+// Phobos hook at the same address would never run. Writing the argument this
+// early works with and without Ares.
+//
+// The stolen bytes are `mov eax,[esp+0x88]`, which has no relative operand, so
+// even a verbatim copy of it stays correct.
+DEFINE_HOOK(0x6FE4F6, TechnoClass_FireAt_SweepFireFirstShotAim, 0x7)
 {
-	GET(BulletClass*, pBullet, EBX);
-	FireAtTemp::FireBullet = pBullet;
+	GET(TechnoClass*, pThis, ESI);
+	GET(WeaponTypeClass*, pWeapon, EBX);
+	GET_BASE(AbstractClass*, pTarget, 0x8);
+	GET_BASE(int, weaponIndex, 0xC);
+
+	// Cleared on every shot so a stale cell can never leak into another Fire_At.
+	FireAtTemp::SweepFireAimCell = nullptr;
+	FireAtTemp::SweepFireAimValid = false;
+	FireAtTemp::SweepFireWeapon = nullptr;
+
+	// Diagnostic: lists every weapon that actually reaches this hook. Logged once
+	// per weapon so the line is never crowded out by repeated shots.
+	if (pWeapon && SweepFireDiag::FirstTime(0, pWeapon->ID))
+	{
+		const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
+		Debug::Log("[SweepFire] @6FE4F6 weapon=[%s] ext=%d enable=%d burst=%d target=%d slot=%d\n",
+			pWeapon->ID, pWeaponExt ? 1 : 0, pWeaponExt ? (pWeaponExt->SweepFire_Enable ? 1 : 0) : -1,
+			pThis->CurrentBurstIndex, pTarget ? 1 : 0, weaponIndex);
+	}
+
+	CoordStruct lineStart {};
+	const auto pAimCell = TechnoExt::Fetch(pThis)->TryStartSweepFire(pWeapon, weaponIndex, pTarget, pThis->CurrentBurstIndex, &lineStart);
+
+	if (pAimCell)
+	{
+		FireAtTemp::SweepFireAimCell = pAimCell;
+		FireAtTemp::SweepFireAimCoords = lineStart;
+		FireAtTemp::SweepFireAimValid = true;
+		FireAtTemp::SweepFireWeapon = pWeapon;
+		R->Base(0x8, pAimCell);
+	}
+
 	return 0;
 }
 
@@ -32,12 +95,126 @@ DEFINE_HOOK(0x6FF15F, TechnoClass_FireAt_ObstacleCellSet, 0x6)
 	GET_BASE(AbstractClass*, pTarget, 0x8);
 	LEA_STACK(CoordStruct*, pSourceCoords, STACK_OFFSET(0xB0, -0x6C));
 
+	// A sweep's first shot travels to the start of the line, so everything drawn
+	// towards it (laser, EBolt, beam, particles) has to be aimed there as well.
+	// Reusing the obstacle cell gets that for free through the hooks below.
+	const auto pAimCell = FireAtTemp::SweepFireAimCell;
+	FireAtTemp::SweepFireAimCell = nullptr;
+
+	if (pWeapon && SweepFireDiag::FirstTime(1, pWeapon->ID))
+		Debug::Log("[SweepFire] @6FF15F weapon=[%s] sweepAimCell=%d\n", pWeapon->ID, pAimCell ? 1 : 0);
+
+	if (pAimCell)
+	{
+		FireAtTemp::pObstacleCell = pAimCell;
+		TechnoExt::Fetch(pThis)->FiringObstacleCell = pAimCell;
+
+		return 0;
+	}
+
 	const auto pBuilding = abstract_cast<BuildingClass*, true>(pTarget);
 	const auto coords = pBuilding ? pBuilding->GetTargetCoords() : pTarget->GetCenterCoords();
 
 	// This is set to a temp variable as well, as accessing it everywhere needed from TechnoExt would be more complicated.
 	FireAtTemp::pObstacleCell = TrajectoryHelper::FindFirstObstacle(*pSourceCoords, coords, pWeapon->Projectile, pThis->Owner);
 	TechnoExt::Fetch(pThis)->FiringObstacleCell = FireAtTemp::pObstacleCell;
+
+	return 0;
+}
+
+DEFINE_HOOK(0x6FF08B, TechnoClass_Fire_RecordBullet, 0x6)
+{
+	GET(BulletClass*, pBullet, EBX);
+	FireAtTemp::FireBullet = pBullet;
+
+	// SweepFire: the first shot of a sweep is created and launched by the engine.
+	// The engine derived its velocity from the (cell) target object at 0x6FED39 and
+	// unlimboed the bullet at 0x6FF014, so the aim cannot be corrected any earlier
+	// without desynchronising velocity and aim. Now that the bullet exists, aim it at
+	// the exact start of the line and adopt that point as its aim coordinate: the
+	// velocity is rotated onto it (keeping the speed the engine computed), or, for an
+	// Arcing projectile whose velocity is a ballistic solution rather than a direction,
+	// solved again from scratch.
+	//
+	// This hook is only reached when the unlimbo succeeded - a failed one jumps to
+	// 0x6FF749 and skips this address - so the bullet is guaranteed to be alive.
+	if (FireAtTemp::SweepFireAimValid && pBullet)
+	{
+		const auto& aim = FireAtTemp::SweepFireAimCoords;
+		const auto from = pBullet->Location;
+		const double length = static_cast<double>(aim.DistanceFrom(from));
+		const double speed = pBullet->Velocity.Magnitude();
+
+		// The projectile's own scatter belongs to the *launch solution*, exactly where it sits for
+		// a normal shot of the same projectile (the engine scatters the firing offset and leaves
+		// the destination on the target). `aim` is the coordinate this shot was told to fire at
+		// and stays exact; only the point the launch is solved for moves. Scattering the aim point
+		// instead spread the sweep's impacts by the full BallisticScatter while a non-sweeping shot
+		// of the same projectile stays inside the target's cell.
+		CoordStruct launchAim = aim;
+
+		if (FireAtTemp::SweepFireWeapon && BulletExt::IsScatterEligible(pBullet->Type) && !BulletExt::HasTrajectory(pBullet->Type))
+			launchAim = BulletExt::GetScatteredCoord(aim, from, aim - from, pBullet->Type, FireAtTemp::SweepFireWeapon);
+
+		BulletExt::Fetch(pBullet)->SweepFireLaunchAim = launchAim;
+
+		Vector3D<double> direction {
+			static_cast<double>(launchAim.X - from.X),
+			static_cast<double>(launchAim.Y - from.Y),
+			static_cast<double>(launchAim.Z - from.Z) };
+
+		static int probeLines = 0;
+
+		if (SweepFireDiag::On() && probeLines < 8)
+		{
+			++probeLines;
+			Debug::Log("[SweepFire/probe] @6FF08B valid=1 type=[%s] arcing=%d invis=%d from=(%d,%d,%d) aim=(%d,%d,%d) len=%.0f speed=%.1f\n",
+				pBullet->Type->ID, pBullet->Type->Arcing ? 1 : 0, pBullet->Type->Inviso ? 1 : 0,
+				from.X, from.Y, from.Z, aim.X, aim.Y, aim.Z, length, speed);
+			Debug::Log("[SweepFire/probe] @6FF08B launchAim=(%d,%d,%d) scattered=%d\n",
+				launchAim.X, launchAim.Y, launchAim.Z, (launchAim == aim) ? 0 : 1);
+		}
+
+		// The aim coordinate and the flag are set for every sweep shot: that coordinate is
+		// what the exact detonation in BulletClass::Update lands the impact on.
+		pBullet->TargetCoords = aim;
+		BulletExt::Fetch(pBullet)->SweepFireAim = true;
+
+		if (length > 1.0 && speed > 0.0 && !pBullet->Type->Arcing)
+		{
+			// Rotate the velocity onto the exact start of the line, keeping the speed
+			// the engine computed. Arcing (lobbed) projectiles need a whole new
+			// ballistic solution instead, see below.
+			direction /= length;
+			pBullet->Velocity = BulletVelocity { direction.X * speed, direction.Y * speed, direction.Z * speed };
+
+			if (SweepFireDiag::Allowed())
+				Debug::Log("[SweepFire] first shot redirected to the exact line start (%d,%d,%d), vel=(%.1f,%.1f,%.1f)\n",
+					aim.X, aim.Y, aim.Z, pBullet->Velocity.X, pBullet->Velocity.Y, pBullet->Velocity.Z);
+		}
+		else if (pBullet->Type->Arcing && FireAtTemp::SweepFireWeapon)
+		{
+			// An Arcing projectile's velocity is a ballistic solution, not a direction, so
+			// it cannot simply be rotated: it has to be solved again for the new aim point.
+			// The engine's own solution is unusable here for two reasons. It follows the
+			// firing techno's facing rather than the exact target, and an
+			// Inaccurate + Arcing projectile additionally takes the engine's Fire_At scatter
+			// (path 2) on top of the sweep's own scatter (path 5), i.e. it gets scattered
+			// twice. Either way the first shot ended up aimed far away from the start of the
+			// line - measured at ~1100 leptons, four cells - so the exact detonation had to
+			// teleport it back. Solving it here with the very formula every follow-up shot
+			// uses makes the first shot behave exactly like the rest of the sweep.
+			pBullet->Velocity = BulletExt::ComputeArcingLaunchVelocity(pBullet->Type, FireAtTemp::SweepFireWeapon, from, launchAim);
+
+			if (SweepFireDiag::Allowed())
+				Debug::Log("[SweepFire] first shot re-solved for the exact line start (%d,%d,%d), engine speed %.1f -> %.1f vel=(%.1f,%.1f,%.1f)\n",
+					aim.X, aim.Y, aim.Z, speed, pBullet->Velocity.Magnitude(),
+					pBullet->Velocity.X, pBullet->Velocity.Y, pBullet->Velocity.Z);
+		}
+	}
+
+	FireAtTemp::SweepFireAimValid = false;
+	FireAtTemp::SweepFireWeapon = nullptr;
 
 	return 0;
 }
@@ -282,6 +459,7 @@ DEFINE_HOOK(0x6FF660, TechnoClass_FireAt_ObstacleCellUnset, 0x6)
 	FireAtTemp::OriginalTargetCoords = CoordStruct::Empty;
 	FireAtTemp::pObstacleCell = nullptr;
 	FireAtTemp::pOriginalTarget = nullptr;
+	FireAtTemp::SweepFireAimCell = nullptr;
 
 	return 0;
 }

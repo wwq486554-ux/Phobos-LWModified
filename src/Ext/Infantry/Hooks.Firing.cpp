@@ -1,4 +1,5 @@
 #include <Ext/Techno/Body.h>
+#include <Ext/InfantryType/Body.h>
 #include <Ext/WeaponType/Body.h>
 
 namespace FiringAITemp
@@ -42,7 +43,12 @@ DEFINE_HOOK(0x5206D2, InfantryClass_FiringAI_SetContext, 0x6)
 
 	const auto pTarget = pThis->Target;
 	FiringAITemp::WeaponIndex = weaponIndex;
-	FiringAITemp::IsSecondary = TechnoTypeExt::Fetch(pThis->Type)->IsSecondary(weaponIndex);
+
+	// Per-weapon firing animation group (WeaponXFire). SpecialAction does not
+	// add a second mechanism here: the animation is chosen for the weapon slot
+	// the ability fires, so the existing per-weapon key already covers it.
+	FiringAITemp::IsSecondary = InfantryTypeExt::Fetch(pThis->Type)->IsSecondaryFireAnim(weaponIndex);
+
 	FiringAITemp::WeaponType = pWeapon;
 	FiringAITemp::FireErrorResult = pThis->GetFireError(pTarget, weaponIndex, true);
 	FiringAITemp::CanFire = true;

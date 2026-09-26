@@ -4,10 +4,15 @@
 #include <Ext/BuildingType/Body.h>
 #include <Ext/House/Body.h>
 #include <Ext/Infantry/Body.h>
+#include <Ext/InfantryType/Body.h>
 #include <Ext/Unit/Body.h>
 #include <Ext/Scenario/Body.h>
 #include <Ext/WeaponType/Body.h>
 #include <Ext/Event/Body.h>
+#include <Ext/Bullet/Trajectories/EngraveLine.h>
+
+#include <MapClass.h>
+#include <CellClass.h>
 
 #include <Utilities/AresFunctions.h>
 #include <Utilities/AresHelper.h>
@@ -1165,6 +1170,739 @@ FireError TechnoExt::GetFireErrorIgnoreDisableWeapons(TechnoClass* pThis, Abstra
 }
 
 // =============================
+// SweepFire
+
+namespace SweepFireDiag
+{
+	int Remaining = 60;
+	int HookEntryRemaining = 6;
+
+	bool On()
+	{
+		return Enabled && WeaponTypeExt::SweepFireProbeRequested();
+	}
+
+	bool Allowed()
+	{
+		if (!On() || Remaining <= 0)
+			return false;
+
+		--Remaining;
+		return true;
+	}
+
+	bool HookEntryAllowed()
+	{
+		if (!On() || HookEntryRemaining <= 0)
+			return false;
+
+		--HookEntryRemaining;
+		return true;
+	}
+
+	namespace
+	{
+		struct SeenKey
+		{
+			int Site;
+			const char* pWeaponId;
+		};
+
+		SeenKey SeenKeys[32];
+		int SeenKeyCount = 0;
+	}
+
+	bool FirstTime(int site, const char* pWeaponId)
+	{
+		if (!On())
+			return false;
+
+		for (int i = 0; i < SeenKeyCount; ++i)
+		{
+			if (SeenKeys[i].Site == site && SeenKeys[i].pWeaponId == pWeaponId)
+				return false;
+		}
+
+		if (SeenKeyCount < 32)
+		{
+			SeenKeys[SeenKeyCount].Site = site;
+			SeenKeys[SeenKeyCount].pWeaponId = pWeaponId;
+			++SeenKeyCount;
+		}
+
+		return true;
+	}
+}
+
+namespace
+{
+	// Anchor of a sweep: the point the virtual line offsets are resolved against. A building
+	// exposes its own target coordinate, everything else its centre.
+	CoordStruct GetSweepAnchor(AbstractClass* pTarget)
+	{
+		const auto pBuilding = abstract_cast<BuildingClass*, true>(pTarget);
+
+		return pBuilding ? pBuilding->GetTargetCoords() : pTarget->GetCenterCoords();
+	}
+}
+
+CellClass* TechnoExt::TryStartSweepFire(WeaponTypeClass* pWeapon, int weaponIndex, AbstractClass* pTarget, int burstIndex, CoordStruct* pLineStartOut)
+{
+	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
+
+	// Weapons that did not opt in stay completely silent, and this runs for every
+	// shot of every weapon.
+	if (!pWeaponExt || !pWeaponExt->SweepFire_Enable)
+		return nullptr;
+
+	if (!pWeaponExt->IsSweepFireEnabled())
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (weapon type cannot sweep: IsSonic / DiskLaser)\n", pWeapon->ID);
+
+		return nullptr;
+	}
+
+	if (!pTarget)
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (no target)\n", pWeapon->ID);
+
+		return nullptr;
+	}
+
+	if (!pWeapon->Projectile)
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (weapon has no Projectile)\n", pWeapon->ID);
+
+		return nullptr;
+	}
+
+	// O-10, second half: when this shot is aimed at something other than the
+	// target the running sweep belongs to, drop that sweep right here instead of
+	// waiting for the next per-frame update. This closes the one-frame window in
+	// which the old sweep would still occupy the container and make the new
+	// trigger bail out with "another sweep is still running".
+	if (!this->Sweeps.empty())
+	{
+		const DWORD targetID = pTarget->UniqueID;
+
+		if (std::any_of(this->Sweeps.begin(), this->Sweeps.end(),
+			[targetID](const SweepFireInstance& item) { return item.AnchorTargetID != 0 && item.AnchorTargetID != targetID; }))
+		{
+			this->AbortSweepFire(true);
+		}
+	}
+
+	// A fresh trigger needs an idle techno whose cooldown has passed. The
+	// follow-up shots of the same Burst always get their sweep, even though the
+	// first one of them is still running (D-15).
+	if (burstIndex <= 0 && !this->Sweeps.empty())
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (another sweep is still running, %d active)\n", pWeapon->ID, static_cast<int>(this->Sweeps.size()));
+
+		return nullptr;
+	}
+
+	if (burstIndex <= 0 && !this->SweepFireCooldownTimer.Expired())
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (cooldown still has %d frames)\n", pWeapon->ID, this->SweepFireCooldownTimer.GetTimeLeft());
+
+		return nullptr;
+	}
+
+	const auto pThis = this->OwnerObject();
+	const CoordStruct anchor = GetSweepAnchor(pTarget);
+
+	const auto& sourceOffset = pWeaponExt->SweepFire_SourceCoord.Get();
+	const auto& targetOffset = pWeaponExt->SweepFire_TargetCoord.Get();
+	Point2D virtualSource { sourceOffset.X, sourceOffset.Y };
+	Point2D virtualTarget { targetOffset.X, targetOffset.Y };
+
+	// The line is described relative to the target. With the default 0,0
+	// coordinates both ends sit on the target, which leaves nothing to sweep;
+	// the weapon then keeps firing its ordinary single shot.
+	if (!EngraveLine::HasOffset(virtualSource) && !EngraveLine::HasOffset(virtualTarget))
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (SourceCoord and TargetCoord are both 0,0)\n", pWeapon->ID);
+
+		return nullptr;
+	}
+
+	const double speed = pWeaponExt->SweepFire_Speed;
+
+	if (speed <= 0.0)
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (Speed is %.1f, must be greater than 0)\n", pWeapon->ID, speed);
+
+		return nullptr;
+	}
+
+	// Burst shots alternate the side the sweep starts from, mirroring engrave.
+	const bool mirrored = pWeaponExt->SweepFire_MirrorCoord && (burstIndex % 2) != 0;
+
+	if (mirrored)
+		EngraveLine::MirrorVirtualCoord(virtualSource, virtualTarget);
+
+	const double rotateRadian = EngraveLine::GetRotateRadian(pThis->GetCoords(), anchor);
+	const CoordStruct lineSource = EngraveLine::AddVirtualOffset(anchor, virtualSource, rotateRadian);
+	const CoordStruct lineTarget = EngraveLine::AddVirtualOffset(anchor, virtualTarget, rotateRadian);
+	const double lineLength = BulletExt::Get2DDistance(lineSource, lineTarget);
+
+	if (lineLength < BulletExt::Epsilon)
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: no sweep (line length is %f)\n", pWeapon->ID, lineLength);
+
+		return nullptr;
+	}
+
+	// The first shot is aimed at the exact start of the line. The projectile's own scatter is
+	// applied to the *launch solution* by the record hook instead (once the engine has created
+	// the bullet), never to the aim point: the aim point is the coordinate this shot was told to
+	// fire at, and TargetCoords is what decides where it goes off. Scattering the aim point made
+	// the sweep spread its impacts by the full BallisticScatter while a normal shot of the same
+	// projectile stays inside the target's cell - measured as a clear difference between a
+	// sweeping unit and a non-sweeping one carrying the same weapon.
+	CoordStruct firstAim = lineSource;
+	auto pAimCell = MapClass::Instance.TryGetCellAt(firstAim);
+
+	if (!pAimCell)
+	{
+		// A scattered point may leave the map even though the line start did not; the shot
+		// is still valid, so fall back to aiming at the unscattered start.
+		firstAim = lineSource;
+		pAimCell = MapClass::Instance.TryGetCellAt(lineSource);
+
+		if (!pAimCell)
+		{
+			if (SweepFireDiag::Allowed())
+				Debug::Log("[SweepFire] %s: no sweep (line start %d,%d,%d is off the map)\n", pWeapon->ID, lineSource.X, lineSource.Y, lineSource.Z);
+
+			return nullptr;
+		}
+	}
+
+	// Interval between two shots of the sweep (D-30). This is deliberately the
+	// weapon's own ROF and not RearmDelay's return value, which is tiered by Burst
+	// position and would hand out the 3-5 frame burst delay.
+	const int shotInterval = Math::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier));
+	// Frames the aim point needs to walk the whole line.
+	const int sweepFrames = Math::max(1, static_cast<int>(std::ceil(lineLength / speed)));
+
+	if (SweepFireDiag::Allowed())
+	{
+		Debug::Log("[SweepFire] %s: sweep started burst=%d slot=%d length=%d frames=%d interval=%d mirror=%d source=(%d,%d,%d) target=(%d,%d,%d)\n",
+			pWeapon->ID, burstIndex, weaponIndex, static_cast<int>(lineLength), sweepFrames, shotInterval, mirrored ? 1 : 0,
+			lineSource.X, lineSource.Y, lineSource.Z, lineTarget.X, lineTarget.Y, lineTarget.Z);
+	}
+
+	SweepFireInstance sweep {};
+	sweep.WeaponIndex = weaponIndex;
+	sweep.BurstIndex = burstIndex;
+	sweep.RotateRadian = rotateRadian;
+	sweep.Mirrored = mirrored;
+	sweep.LineSource = lineSource;
+	sweep.LineTarget = lineTarget;
+	sweep.AnchorCoord = anchor;
+	sweep.AnchorTargetID = pTarget->UniqueID;
+	sweep.ShotTimer.Start(shotInterval);
+	sweep.SweepTimer.Start(sweepFrames);
+
+	// The same firing cycle may be reported more than once; keying by Burst index
+	// keeps the container from growing.
+	const auto it = std::find_if(this->Sweeps.begin(), this->Sweeps.end(),
+		[burstIndex](const SweepFireInstance& item) { return item.BurstIndex == burstIndex; });
+
+	if (it != this->Sweeps.end())
+		*it = sweep;
+	else
+		this->Sweeps.push_back(sweep);
+
+	// The point the caller should aim the first shot at, once the engine has launched that
+	// bullet (see the record hook). It mirrors AimMode exactly, which is what makes the mode
+	// mean the same thing for the first shot as for the follow-ups:
+	//   coord / auto -> the exact (scattered) start of the line;
+	//   cell         -> the centre of the cell under it, i.e. the old gridded aim.
+	// It must always be filled in: leaving it at 0,0,0 (as it used to) would hand the first
+	// shot a target of the map corner.
+	if (pLineStartOut)
+		*pLineStartOut = (pWeaponExt->SweepFire_AimMode == SweepFireAimMode::Cell) ? pAimCell->GetCoords() : firstAim;
+
+	return pAimCell;
+}
+
+// Re-resolves the world-space segment of a sweep from its virtual offsets. Two optional keys feed
+// this, both carrying engrave semantics:
+//   SweepFire.AttachToTarget: the anchor follows the target, so the whole line slides with it.
+//   SweepFire.UpdateDirection: the orientation follows the firer, so the line turns around the
+//     anchor when the firer moves or turns.
+// Neither can change the line's length: one translates the segment, the other rotates it around
+// the anchor. That is what keeps the sweep's frame schedule - and therefore the aim point's
+// distance along the line - valid without restarting the timers.
+void TechnoExt::RefreshSweepLine(SweepFireInstance& sweep, WeaponTypeClass* pWeapon)
+{
+	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
+
+	if (!pWeaponExt)
+		return;
+
+	const bool attachToTarget = pWeaponExt->SweepFire_AttachToTarget;
+	const bool updateDirection = pWeaponExt->SweepFire_UpdateDirection;
+
+	if (!attachToTarget && !updateDirection)
+		return;
+
+	const auto pThis = this->OwnerObject();
+
+	if (attachToTarget)
+	{
+		// A target that let go or died leaves the last anchor in place, so the line is still
+		// swept out to its end exactly as D-7 requires. The per-frame update above already
+		// aborted the sweep if the firer switched to a different target, so a live Target here
+		// is the one this sweep belongs to.
+		if (const auto pTarget = pThis->Target)
+			sweep.AnchorCoord = GetSweepAnchor(pTarget);
+	}
+
+	if (updateDirection)
+		sweep.RotateRadian = EngraveLine::GetRotateRadian(pThis->GetCoords(), sweep.AnchorCoord);
+
+	const auto& sourceOffset = pWeaponExt->SweepFire_SourceCoord.Get();
+	const auto& targetOffset = pWeaponExt->SweepFire_TargetCoord.Get();
+	Point2D virtualSource { sourceOffset.X, sourceOffset.Y };
+	Point2D virtualTarget { targetOffset.X, targetOffset.Y };
+
+	if (sweep.Mirrored)
+		EngraveLine::MirrorVirtualCoord(virtualSource, virtualTarget);
+
+	const CoordStruct previousSource = sweep.LineSource;
+	const CoordStruct previousTarget = sweep.LineTarget;
+
+	sweep.LineSource = EngraveLine::AddVirtualOffset(sweep.AnchorCoord, virtualSource, sweep.RotateRadian);
+	sweep.LineTarget = EngraveLine::AddVirtualOffset(sweep.AnchorCoord, virtualTarget, sweep.RotateRadian);
+
+	// Only report a line that actually moved, so the trace stays readable and its budget is
+	// spent on the frames that show the follow-up shots taking a new line into account.
+	if (SweepFireDiag::On() && (!(sweep.LineSource == previousSource) || !(sweep.LineTarget == previousTarget)))
+	{
+		static int lineLines = 0;
+
+		if (lineLines < 40)
+		{
+			++lineLines;
+			Debug::Log("[SweepFire/line] w=[%s] attach=%d updir=%d anchor=(%d,%d,%d) src=(%d,%d,%d) tgt=(%d,%d,%d) rot=%.4f\n",
+				pWeapon->ID, attachToTarget ? 1 : 0, updateDirection ? 1 : 0,
+				sweep.AnchorCoord.X, sweep.AnchorCoord.Y, sweep.AnchorCoord.Z,
+				sweep.LineSource.X, sweep.LineSource.Y, sweep.LineSource.Z,
+				sweep.LineTarget.X, sweep.LineTarget.Y, sweep.LineTarget.Z, sweep.RotateRadian);
+		}
+	}
+}
+
+void TechnoExt::UpdateSweepFire()
+{
+	// Diagnostic: proves the per-frame TechnoExt hook runs at all, so a missing
+	// Fire_At line can be told apart from "Phobos hooks do not run here".
+	if (SweepFireDiag::On())
+	{
+		static bool loggedAlive = false;
+
+		if (!loggedAlive)
+		{
+			loggedAlive = true;
+			Debug::Log("[SweepFire] runtime alive: TechnoExt::OnEarlyUpdate reached\n");
+		}
+	}
+
+	// Most technos never sweep. This runs every frame, so it goes first.
+	if (this->Sweeps.empty())
+		return;
+
+	const auto pThis = this->OwnerObject();
+
+	// A sweep cannot outlive its firer. The target dying is fine: the line keeps
+	// its last coordinates and is swept to the end (D-7).
+	if (!pThis->IsAlive || pThis->InLimbo || pThis->IsSinking || pThis->Health <= 0 || pThis->IsUnderEMP())
+	{
+		this->Sweeps.clear();
+		return;
+	}
+
+	// Infantry stop firing when they are told to move, but the follow-up shots are
+	// created by hand and never go through Fire_At / GetFireError, so nothing else
+	// would stop them: the soldier would keep spraying from a fixed line while
+	// walking away. Vehicles *can* fire on the move, so this rule is deliberately
+	// infantry-only; a blanket "moving cancels" would break vehicle sweeps.
+	if (const auto pInf = abstract_cast<InfantryClass*>(pThis))
+	{
+		if (!pInf->Locomotor || pInf->Locomotor->Is_Moving())
+		{
+			if (SweepFireDiag::Allowed())
+				Debug::Log("[SweepFire] %s: sweep aborted (the infantry is moving)\n", pThis->get_ID());
+
+			this->AbortSweepFire(true);
+			return;
+		}
+	}
+
+	// O-10: an explicit new target cancels the running sweep and lets the next
+	// trigger start one immediately. A target that died leaves Target null (or
+	// unchanged), and the line is swept to the end instead (D-7).
+	if (const auto pTarget = pThis->Target)
+	{
+		const DWORD targetID = pTarget->UniqueID;
+
+		for (const auto& sweep : this->Sweeps)
+		{
+			if (sweep.AnchorTargetID != 0 && sweep.AnchorTargetID != targetID)
+			{
+				if (SweepFireDiag::Allowed())
+					Debug::Log("[SweepFire] %s: sweep aborted (the target changed, %u -> %u)\n", pThis->get_ID(), sweep.AnchorTargetID, targetID);
+
+				this->AbortSweepFire(true);
+				return;
+			}
+		}
+	}
+
+	int cooldown = -1;
+
+	for (auto it = this->Sweeps.begin(); it != this->Sweeps.end(); )
+	{
+		auto& sweep = *it;
+		const auto pWeaponStruct = pThis->GetWeapon(sweep.WeaponIndex);
+		const auto pWeapon = pWeaponStruct ? pWeaponStruct->WeaponType : nullptr;
+		const auto pWeaponExt = pWeapon ? WeaponTypeExt::TryFetch(pWeapon) : nullptr;
+
+		if (!pWeaponExt || !pWeaponExt->IsSweepFireEnabled())
+		{
+			it = this->Sweeps.erase(it);
+			continue;
+		}
+
+		bool failed = false;
+		const int shotInterval = Math::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier));
+
+		// AttachToTarget / UpdateDirection move the line before this frame's shots are placed
+		// on it, so a shot always lands on the line as it is now.
+		this->RefreshSweepLine(sweep, pWeapon);
+
+		while (sweep.ShotTimer.GetTimeLeft() <= 0 && sweep.SweepTimer.GetTimeLeft() > 0)
+		{
+			if (!this->FireSweepShot(sweep, pWeapon))
+			{
+				// Allocation failure: stop this sweep instead of retrying forever
+				// (D-16, there is no shot cap).
+				failed = true;
+				break;
+			}
+
+			sweep.ShotTimer.Start(shotInterval);
+		}
+
+		// The aim point reached the end of the line, or the sweep was cut short.
+		if (failed || sweep.SweepTimer.GetTimeLeft() <= 0)
+		{
+			// Optional closing shot (D-17, SweepFire.ShotAtEnd): the aim point moves
+			// in ROF-sized steps, so the last step normally stops short of the end
+			// of the line. Fire one more shot exactly on the end point.
+			if (!failed && pWeaponExt->SweepFire_ShotAtEnd)
+			{
+				const double lineLength = BulletExt::Get2DDistance(sweep.LineSource, sweep.LineTarget);
+
+				if (sweep.LastDistance < lineLength - 1.0)
+				{
+					const double previous = sweep.LastDistance;
+
+					if (this->FireSweepShot(sweep, pWeapon, lineLength) && SweepFireDiag::Allowed())
+						Debug::Log("[SweepFire] %s: closing shot at the end of the line (distance %.0f, previous %.0f)\n", pWeapon->ID, lineLength, previous);
+				}
+			}
+
+			cooldown = Math::max(cooldown, pWeaponExt->SweepFire_Cooldown.Get());
+
+			if (SweepFireDiag::Allowed())
+				Debug::Log("[SweepFire] %s: sweep ended after %d follow-up shot(s) (failed=%d)\n", pWeapon->ID, sweep.ShotsFired, failed ? 1 : 0);
+
+			it = this->Sweeps.erase(it);
+			continue;
+		}
+
+		++it;
+	}
+
+	// The next trigger waits for the cooldown measured from the end of the sweep.
+	if (this->Sweeps.empty())
+	{
+		if (cooldown >= 0)
+			this->SweepFireCooldownTimer.Start(cooldown);
+	}
+	else
+	{
+		// Keep the unit's own firing animation running for the whole sweep. Every
+		// sweeper shares one animation, so the slot of any sweep will do.
+		this->UpdateInfantrySweepAnim(this->Sweeps.front().WeaponIndex);
+	}
+}
+
+void TechnoExt::AbortSweepFire(bool releaseRearm)
+{
+	if (this->Sweeps.empty())
+		return;
+
+	this->Sweeps.clear();
+	this->SweepFireCooldownTimer.Stop();
+
+	// The synthetic reload written by the rearm hook was sized for the whole
+	// sweep. The sweep is gone, so keeping it would only lock the weapon out for
+	// a while with nothing on screen to explain it.
+	if (releaseRearm)
+		this->OwnerObject()->RearmTimer.Stop();
+}
+
+void TechnoExt::UpdateInfantrySweepAnim(int weaponIndex)
+{
+	const auto pThis = this->OwnerObject();
+
+	if (pThis->WhatAmI() != AbstractType::Infantry)
+		return;
+
+	const auto pWeaponStruct = pThis->GetWeapon(weaponIndex);
+	const auto pWeapon = pWeaponStruct ? pWeaponStruct->WeaponType : nullptr;
+	const auto pWeaponExt = pWeapon ? WeaponTypeExt::TryFetch(pWeapon) : nullptr;
+
+	if (!pWeaponExt || !pWeaponExt->SweepFire_InfantryFireAnim)
+		return;
+
+	const auto pInf = static_cast<InfantryClass*>(pThis);
+
+	// Mirror of the sequence InfantryClass::FiringAI itself would pick
+	// (0x52078F..0x5208FE), so a sweep never plays something the unit would not
+	// have played for a normal shot.
+	Sequence sequence;
+
+	if (pInf->Type->Locomotor == LocomotionClass::CLSIDs::Jumpjet)
+		sequence = Sequence::FireFly;
+	else if (pInf->SequenceAnim == Sequence::Deploy || pInf->SequenceAnim == Sequence::Deployed
+		|| pInf->SequenceAnim == Sequence::DeployedFire || pInf->SequenceAnim == Sequence::DeployedIdle)
+		sequence = Sequence::DeployedFire;
+	else if (InfantryTypeExt::Fetch(pInf->Type)->IsSecondaryFireAnim(weaponIndex))
+		sequence = pInf->Crawling ? Sequence::SecondaryProne : Sequence::SecondaryFire;
+	else
+		sequence = pInf->Crawling ? Sequence::FireProne : Sequence::FireUp;
+
+	// PlayAnim returns early - without doing anything - when the requested
+	// sequence is the one already playing (0x51D911), and force does not change
+	// that. Calling it every frame therefore loops the firing animation exactly
+	// once per cycle: a no-op while it plays, a restart the frame after it ends.
+	pInf->PlayAnim(sequence, true);
+}
+
+bool TechnoExt::FireSweepShot(SweepFireInstance& sweep, WeaponTypeClass* pWeapon, double distanceOverride)
+{
+	const auto pThis = this->OwnerObject();
+	const auto pWeaponExt = WeaponTypeExt::Fetch(pWeapon);
+	const auto pOwner = pThis->Owner;
+
+	// Where the aim point is on this frame: the line is walked at a constant
+	// speed, so the distance only depends on how long the sweep has been running.
+	// An explicit distance is used for the optional closing shot, which lands
+	// exactly on the end of the line instead of on the last ROF-sized step.
+	const int elapsed = sweep.SweepTimer.TimeLeft - sweep.SweepTimer.GetTimeLeft();
+	const double distance = distanceOverride >= 0.0 ? distanceOverride : pWeaponExt->SweepFire_Speed * elapsed;
+
+	CoordStruct aim {};
+
+	if (!EngraveLine::GetCoordAtDistance(BulletExt::Coord2Point(sweep.LineSource), BulletExt::Coord2Point(sweep.LineTarget),
+			distance, sweep.LineTarget.Z, aim))
+		return false;
+
+	sweep.LastDistance = distance;
+
+	// The projectile's own scatter belongs to the *launch solution*, exactly where it sits for a
+	// normal shot of the same projectile: the engine scatters the firing offset and leaves the
+	// destination on the target. `aim` is the coordinate this shot fires at and stays exact -
+	// only the point the launch is solved for moves. Projectiles with a Phobos trajectory are
+	// skipped because their own path scatters them (path 3).
+	CoordStruct launchAim = aim;
+
+	if (pWeapon->Projectile && BulletExt::IsScatterEligible(pWeapon->Projectile) && !BulletExt::HasTrajectory(pWeapon->Projectile))
+	{
+		const CoordStruct firerCoord = pThis->GetCoords();
+		launchAim = BulletExt::GetScatteredCoord(aim, firerCoord, aim - firerCoord, pWeapon->Projectile, pWeapon);
+	}
+
+	const auto pAimCell = MapClass::Instance.TryGetCellAt(aim);
+
+	if (!pAimCell)
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: follow-up shot dropped (aim point %d,%d,%d is off the map)\n", pWeapon->ID, aim.X, aim.Y, aim.Z);
+
+		return false;
+	}
+
+	// aim: the shot aims at the exact point the aim point is on this frame.
+	// cell: the shot aims at the centre of the cell containing that point, which
+	// is what the first version did and what quantizes the line into cell-sized
+	// steps. Auto behaves like aim; only Cell keeps the old gridded behaviour.
+	const bool exactAim = pWeaponExt->SweepFire_AimMode != SweepFireAimMode::Cell;
+
+	{
+		static int probeLines = 0;
+
+		if (SweepFireDiag::On() && probeLines < 4)
+		{
+			++probeLines;
+			Debug::Log("[SweepFire/probe] follow-up setup exactAim=%d aimMode=%d proj=[%s] arcing=%d invis=%d aim=(%d,%d,%d) launchAim=(%d,%d,%d)\n",
+				exactAim ? 1 : 0, static_cast<int>(pWeaponExt->SweepFire_AimMode.Get()),
+				pWeapon->Projectile->ID, pWeapon->Projectile->Arcing ? 1 : 0, pWeapon->Projectile->Inviso ? 1 : 0,
+				aim.X, aim.Y, aim.Z, launchAim.X, launchAim.Y, launchAim.Z);
+		}
+	}
+
+	const int damage = static_cast<int>(pWeapon->Damage * TechnoExt::GetCurrentFirepowerMultiplier(pThis));
+	const auto pBullet = pWeapon->Projectile->CreateBullet(pAimCell, pThis, damage, pWeapon->Warhead, pWeapon->Speed, pWeapon->Bright);
+
+	if (!pBullet)
+	{
+		if (SweepFireDiag::Allowed())
+			Debug::Log("[SweepFire] %s: follow-up shot dropped (CreateBullet returned null)\n", pWeapon->ID);
+
+		return false;
+	}
+
+	const auto pExt = BulletExt::Fetch(pBullet);
+
+	// Diagnostic: remember what this shot's launch was actually solved for.
+	pExt->SweepFireLaunchAim = launchAim;
+
+	if (exactAim)
+	{
+		// The bullet keeps the cell as its target (the engine needs a valid target
+		// to fly at and detonate over), but its aim coordinate is the exact point
+		// on the line. That coordinate is what the projectile AI actually reads to
+		// decide where it arrives: BulletClass::AI at 0x4677F1 loads [bullet+0x140]
+		// (TargetCoords) and compares it against the bullet's own cell at 0x467840.
+		// Set here as well so the launch velocity below is computed towards the aim.
+		pBullet->TargetCoords = aim;
+		pExt->SweepFireAim = true;
+	}
+
+	// Muzzle of the Burst shot this sweep belongs to.
+	bool flhFound = false;
+	CoordStruct flh = TechnoExt::GetBurstFLH(pThis, sweep.WeaponIndex, flhFound, sweep.BurstIndex);
+
+	if (!flhFound)
+	{
+		const auto pWeaponStruct = pThis->GetWeapon(sweep.WeaponIndex);
+		flh = pWeaponStruct ? pWeaponStruct->FLH : CoordStruct::Empty;
+
+		if (sweep.Mirrored)
+			flh.Y = -flh.Y;
+	}
+
+	const CoordStruct muzzle = TechnoExt::GetFLHAbsoluteCoords(pThis, flh, pThis->HasTurret());
+
+	pExt->NotMainWeapon = false;
+	pExt->FLHCoord = flh;
+	// Suppress the trajectory's own OpenFire so the aim point can be set first. The launch
+	// is solved for launchAim (the aim point with the projectile's scatter applied), so the
+	// scatter steers the shot while the coordinate it was aimed at stays exact.
+	pExt->DispersedTrajectory = true;
+	BulletExt::SimulatedFiringUnlimbo(pBullet, pOwner, pWeapon, muzzle, true, {}, exactAim ? &launchAim : nullptr);
+	pExt->DispersedTrajectory = false;
+
+	if (exactAim)
+	{
+		// Set it again *after* the launch, which is the point at which it is known to
+		// survive: BulletClass::MoveTo (0x468670) rewrites the bullet, and for an
+		// Inviso projectile such as MP5Proj it does not even get that far - the
+		// unlimbo it performs fails (0x46868B -> 0x468B7D returns false), leaving the
+		// bullet sitting on the cell it was created for with no velocity at all. The
+		// value written before the launch is lost in that path, which is why every
+		// follow-up shot used to detonate on its cell centre. The first shot writes
+		// its aim at 0x6FF08B, i.e. after the launch, and that one did stick.
+		pBullet->TargetCoords = aim;
+		pExt->SweepFireAim = true;
+
+		static int probeLines = 0;
+
+		if (SweepFireDiag::On() && probeLines < 6)
+		{
+			++probeLines;
+			Debug::Log("[SweepFire/probe] after launch tc=(%d,%d,%d) loc=(%d,%d,%d) vel=(%.1f,%.1f,%.1f) aim=(%d,%d,%d)\n",
+				pBullet->TargetCoords.X, pBullet->TargetCoords.Y, pBullet->TargetCoords.Z,
+				pBullet->Location.X, pBullet->Location.Y, pBullet->Location.Z,
+				pBullet->Velocity.X, pBullet->Velocity.Y, pBullet->Velocity.Z,
+				aim.X, aim.Y, aim.Z);
+		}
+	}
+
+	if (const auto pTraj = pExt->Trajectory.get())
+	{
+		pTraj->CurrentBurst = sweep.Mirrored ? -1 : 0;
+		pTraj->CountOfBurst = 1;
+		pTraj->OpenFire();
+	}
+
+	// Every follow-up shot is a full shot, effects included (D-10/D-24).
+	BulletExt::SimulatedFiringEffects(pBullet, pOwner, nullptr, true, true);
+
+	++sweep.ShotsFired;
+
+	if (SweepFireDiag::Allowed())
+	{
+		Debug::Log("[SweepFire] %s: follow-up #%d fired at distance %d -> aim (%d,%d)\n",
+			pWeapon->ID, sweep.ShotsFired, static_cast<int>(distance), aim.X, aim.Y);
+	}
+
+	return true;
+}
+
+SweepFireInstance* TechnoExt::FindSweep(int burstIndex)
+{
+	const auto it = std::find_if(this->Sweeps.begin(), this->Sweeps.end(),
+		[burstIndex](const SweepFireInstance& item) { return item.BurstIndex == burstIndex; });
+
+	return it != this->Sweeps.end() ? &*it : nullptr;
+}
+
+int TechnoExt::GetSweepFireRearmTime(WeaponTypeClass* pWeapon)
+{
+	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
+
+	if (!pWeaponExt || !pWeaponExt->IsSweepFireEnabled())
+		return -1;
+
+	const auto pThis = this->OwnerObject();
+
+	// Only the last shot of a Burst arms the rearm timer. The earlier barrels keep
+	// the vanilla Burst delays, so a multi-barrel weapon still fires all of them
+	// and only the finished sweep blocks the next trigger (8.2 / R-17).
+	if (pThis->CurrentBurstIndex < pWeapon->Burst)
+		return -1;
+
+	// Taking this shot bumped CurrentBurstIndex, so the sweep it belongs to is the
+	// one keyed by the previous value.
+	const auto pSweep = this->FindSweep(pThis->CurrentBurstIndex - 1);
+
+	if (!pSweep)
+		return -1;
+
+	// The engine writes this into RearmTimer, which is what makes the weapon look
+	// busy for the whole sweep and keeps the attack cursor and the AI honest
+	// (D-23). Berzerk's halving is discarded along with the vanilla value (D-29).
+	return pSweep->SweepTimer.TimeLeft + pWeaponExt->SweepFire_Cooldown.Get();
+}
+
+// =============================
 // load / save
 
 template <typename T>
@@ -1189,6 +1927,8 @@ void TechnoExt::Serialize(T& Stm)
 		.Process(this->CanCloakDuringRearm)
 		.Process(this->WHAnimRemainingCreationInterval)
 		.Process(this->LastWeaponType)
+		.Process(this->LastWeaponFLH)
+		.Process(this->TrajectoryGroup)
 		.Process(this->FiringObstacleCell)
 		.Process(this->IsDetachingForCloak)
 		.Process(this->BeControlledThreatFrame)
@@ -1204,6 +1944,10 @@ void TechnoExt::Serialize(T& Stm)
 		.Process(this->DropCrateType)
 		.Process(this->AttachedEffectInvokerCount)
 		.Process(this->IsSelected)
+		.Process(this->SpecialActionTimer)
+		.Process(this->LastSpecialActionFrame)
+		.Process(this->SpecialActionWeaponIndex)
+		.Process(this->SpecialActionBurstShotsLeft)
 		.Process(this->TintColorOwner)
 		.Process(this->TintColorAllies)
 		.Process(this->TintColorEnemies)
@@ -1218,7 +1962,38 @@ void TechnoExt::Serialize(T& Stm)
 		.Process(this->LastTargetCrdClearTimer)
 		.Process(this->ShouldBeDead)
 		.Process(this->PreventCrewEscape)
+		.Process(this->Sweeps)
+		.Process(this->SweepFireCooldownTimer)
 		;
+}
+
+bool SweepFireInstance::Load(PhobosStreamReader& stm, bool registerForChange)
+{
+	return this->Serialize(stm);
+}
+
+bool SweepFireInstance::Save(PhobosStreamWriter& stm) const
+{
+	return const_cast<SweepFireInstance*>(this)->Serialize(stm);
+}
+
+template <typename T>
+bool SweepFireInstance::Serialize(T& stm)
+{
+	return stm
+		.Process(this->WeaponIndex)
+		.Process(this->BurstIndex)
+		.Process(this->ShotTimer)
+		.Process(this->SweepTimer)
+		.Process(this->LineSource)
+		.Process(this->LineTarget)
+		.Process(this->AnchorCoord)
+		.Process(this->RotateRadian)
+		.Process(this->Mirrored)
+		.Process(this->ShotsFired)
+		.Process(this->LastDistance)
+		.Process(this->AnchorTargetID)
+		.Success();
 }
 
 void TechnoExt::OnDetach(AirstrikeClass* pTarget, bool removed)

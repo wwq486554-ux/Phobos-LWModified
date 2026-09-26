@@ -5,6 +5,12 @@
 #include <Ext/WarheadType/Body.h>
 #include <Ext/WeaponType/Body.h>
 #include <Utilities/AresHelper.h>
+#include <Utilities/Debug.h>
+
+// Diagnostics for the LocomotorWeapon ("magnetron") locomotor: it reports what a
+// victim looks like when something finally shoots at it again. See
+// LocomotorWeapon::TrackVictim in LocomotorWeaponLocomotionClass.cpp.
+#include <Locomotion/LocomotorWeaponLocomotionClass.h>
 
 namespace ReceiveDamageTemp
 {
@@ -19,6 +25,51 @@ DEFINE_HOOK(0x701900, TechnoClass_ReceiveDamage_Shield, 0x6)
 
 	const auto pWHExt = WarheadTypeExt::Fetch(args->WH);
 	int& damage = *args->Damage;
+
+	// LocomotorWeapon diagnostics. TechnoClass::ReceiveDamage has exactly two
+	// gates that zero the damage based on the *target's* state, and this hook
+	// runs in front of both of them:
+	//   0x701A3B  IsIronCurtained()   (reads TechnoClass::IronCurtainTimer +0x18C)
+	//   0x701AAD  BeingWarpedOut      (virtual +0x1D4, reads +0x270; the state a
+	//                                 Chrono Legionnaire leaves on its victim)
+	// Both are skipped when args->IgnoreDefenses is set, and Phobos lets warheads
+	// with PenetratesIronCurtain/ForceShield past the first one. Logging the state
+	// and the damage here is therefore enough to tell which gate (if any) eats it.
+	// Compiled out unless LocomotorWeapon::Diagnostics is on.
+	if constexpr (LocomotorWeapon::Diagnostics)
+	{
+		if (LocomotorWeapon::IsTrackedVictim(pThis))
+		{
+			// Victims are always FootClass (Unit/Aircraft); the locomotor flags live
+			// there and not on TechnoClass.
+			FootClass* const pFoot = generic_cast<FootClass*, true>(pThis);
+			auto const pExt = TechnoExt::Fetch(pThis);
+			const auto pShield = pExt->Shield.get();
+
+			// The four verdicts below are what the hook's *own* filter (further down)
+			// turns into "damage = 0"; log them so a zeroed hit can be attributed.
+			Debug::Log("[LocomotorWeapon] Hit: target=%s dmg=%d wh=%s atk=%s ignoreDefenses=%d health=%d estimated=%d ic=%d icLeft=%d penIC=%d fs=%d warpedOut=%d warpingOut=%d temporalTargetingMe=%s temporalImUsing=%s bunker=%s z=%d height=%d inAir=%d attacked=%d letgo=%d manip=%d crash=%d falling=%d frozen=%d source=%s phobos[hthr=%d vthr=%d invok=%d neutral=%d canKill=%d unkillable=%d shield=%d shieldHP=%d]\n",
+				LocomotorWeapon::TechnoLabel(pThis), damage,
+				args->WH && args->WH->ID ? args->WH->ID : "<none>",
+				LocomotorWeapon::TechnoLabel(args->Attacker), args->IgnoreDefenses,
+				pThis->Health, pThis->EstimatedHealth,
+				pThis->IsIronCurtained(), pThis->IronCurtainTimer.TimeLeft,
+				pWHExt->CanAffectInvulnerable(pThis), pThis->ForceShielded,
+				pThis->BeingWarpedOut, pThis->WarpingOut,
+				LocomotorWeapon::PointerLabel(pThis->TemporalTargetingMe),
+				LocomotorWeapon::PointerLabel(pThis->TemporalImUsing),
+				LocomotorWeapon::PointerLabel(pThis->BunkerLinkedItem),
+				pThis->GetCoords().Z, pThis->GetHeight(), pThis->IsInAir(),
+				pFoot ? pFoot->IsAttackedByLocomotor : 0, pFoot ? pFoot->IsLetGoByLocomotor : 0,
+				pThis->IsBeingManipulated, pThis->IsCrashing, pThis->IsFallingDown,
+				pFoot ? pFoot->FrozenStill : 0, LocomotorWeapon::PointerLabel(pThis->LocomotorSource),
+				pWHExt->IsHealthInThreshold(pThis), pWHExt->IsVeterancyInThreshold(pThis),
+				pWHExt->IsInvokerAllowed(pThis, args->Attacker),
+				!pWHExt->AffectsNeutral && pThis->Owner->IsNeutral(),
+				pWHExt->CanKill ? 1 : 0, pExt->AE.Unkillable ? 1 : 0,
+				pShield ? pShield->IsActive() : -1, pShield ? pShield->GetHP() : -1);
+		}
+	}
 
 	// AffectsAbove/BelowPercent & AffectsNeutral can ignore IgnoreDefenses like AffectsAllies/Enmies/Owner
 	// They should be checked here to cover all cases that directly use ReceiveDamage to deal damage
@@ -213,11 +264,28 @@ DEFINE_HOOK(0x702819, TechnoClass_ReceiveDamage_Decloak, 0xA)
 
 DEFINE_HOOK(0x701DFF, TechnoClass_ReceiveDamage_FlyingStrings, 0x7)
 {
-	if (!Phobos::DisplayDamageNumbers)
-		return 0;
-
 	GET(TechnoClass* const, pThis, ESI);
 	GET(int* const, pDamage, EBX);
+
+	// LocomotorWeapon diagnostics: 0x701DFF sits directly behind the call to
+	// ObjectClass::ReceiveDamage (0x5F5390), i.e. getting here means the damage
+	// passed every invulnerability gate and has just been applied to Health. If a
+	// tracked victim produces a "Hit:" line but no "Hit-final:" line, a gate ate
+	// the damage - and the "Hit:" line says which one.
+	// Compiled out unless LocomotorWeapon::Diagnostics is on.
+	if constexpr (LocomotorWeapon::Diagnostics)
+	{
+		if (LocomotorWeapon::IsTrackedVictim(pThis))
+		{
+			Debug::Log("[LocomotorWeapon] Hit-final: target=%s dmg=%d health=%d estimated=%d z=%d height=%d inAir=%d ic=%d warpedOut=%d\n",
+				LocomotorWeapon::TechnoLabel(pThis), *pDamage, pThis->Health, pThis->EstimatedHealth,
+				pThis->GetCoords().Z, pThis->GetHeight(), pThis->IsInAir(),
+				pThis->IsIronCurtained(), pThis->BeingWarpedOut);
+		}
+	}
+
+	if (!Phobos::DisplayDamageNumbers)
+		return 0;
 
 	if (*pDamage)
 		GeneralUtils::DisplayDamageNumberString(*pDamage, DamageDisplayType::Regular, pThis->GetRenderCoords(), TechnoExt::Fetch(pThis)->DamageNumberOffset);

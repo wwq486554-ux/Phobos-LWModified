@@ -6,6 +6,8 @@
 #include <Ext/Infantry/Body.h>
 #include <Ext/Rules/Body.h>
 #include <Ext/Unit/Body.h>
+
+#include "SpecialAction.h"
 #include <Ext/WarheadType/Body.h>
 #include <Ext/WeaponType/Body.h>
 #include <Utilities/GeneralUtils.h>
@@ -98,6 +100,21 @@ DEFINE_HOOK(0x6F3428, TechnoClass_WhatWeaponShouldIUse_ForceWeapon, 0x6)
 	GET_STACK(AbstractClass*, pTarget, STACK_OFFSET(0x18, 0x4));
 
 	auto const pTypeExt = TechnoExt::Fetch(pThis)->TypeExtData;
+
+	// Weapon SpecialAction: while its burst is in progress the engine must use the
+	// slot the ability picked. Giving it the highest priority keeps the choice
+	// unambiguous for the units that are actually using the ability; every other
+	// unit falls through to the normal ForceWeapon / MultiWeapon logic below.
+	if constexpr (SpecialAction::Enabled)
+	{
+		const int specialActionIndex = SpecialAction::GetForcedWeaponSlot(pThis);
+
+		if (specialActionIndex >= 0)
+		{
+			R->EAX(specialActionIndex);
+			return UseWeaponIndex;
+		}
+	}
 
 	// Force weapon
 	const int forceWeaponIndex = pTypeExt->SelectForceWeapon(pThis, pTarget);
@@ -314,7 +331,7 @@ DEFINE_HOOK(0x5218F3, InfantryClass_WhatWeaponShouldIUse_DeployFireWeapon, 0x6)
 #pragma region TechnoClass_GetFireError
 DEFINE_HOOK(0x6FC339, TechnoClass_CanFire, 0x6)
 {
-	enum { CannotFire = 0x6FCB7E };
+	enum { CannotFire = 0x6FCB7E, TemporarilyCannotFire = 0x6FCD0E };
 
 	GET(TechnoClass*, pThis, ESI);
 	GET(WeaponTypeClass*, pWeapon, EDI);
@@ -329,9 +346,12 @@ DEFINE_HOOK(0x6FC339, TechnoClass_CanFire, 0x6)
 	if (nMoney < 0 && pThis->Owner->Available_Money() < -nMoney)
 		return CannotFire;
 
+	const auto pBulletType = pWeapon->Projectile;
+	const auto pBulletTypeExt = BulletTypeExt::Fetch(pBulletType);
+
 	// AAOnly doesn't need to be checked if LandTargeting=1.
-	if (pThis->GetTechnoType()->LandTargeting != LandTargetingType::Land_Not_OK && pWeapon->Projectile->AA
-		&& pTarget && !pTarget->IsInAir() && BulletTypeExt::Fetch(pWeapon->Projectile)->AAOnly)
+	if (pThis->GetTechnoType()->LandTargeting != LandTargetingType::Land_Not_OK && pBulletType->AA
+		&& pTarget && !pTarget->IsInAir() && pBulletTypeExt->AAOnly)
 	{
 		return CannotFire;
 	}
@@ -395,6 +415,9 @@ DEFINE_HOOK(0x6FC339, TechnoClass_CanFire, 0x6)
 				return CannotFire;
 		}
 	}
+
+	if (pBulletTypeExt->CreateCapacity >= 0 && BulletExt::CheckExceededCapacity(pThis, pBulletType))
+		return (pWeapon->Damage >= 0 || (pTargetTechno && pTargetTechno->GetHealthPercentage() < RulesClass::Instance->ConditionGreen)) ? TemporarilyCannotFire : CannotFire;
 
 	return 0;
 }
@@ -894,6 +917,15 @@ DEFINE_HOOK(0x6FF660, TechnoClass_FireAt_LateLogic, 0x6)
 		pThis->CurrentBurstIndex = 0;
 	}
 
+	// Weapon SpecialAction: count this shot and hand the unit back to its normal
+	// weapon selection once the whole burst has been fired. The ability's cooldown
+	// starts here as well, so arming it and then cancelling it costs nothing.
+	if constexpr (SpecialAction::Enabled)
+	{
+		if (pExt->SpecialActionBurstShotsLeft > 0 && --pExt->SpecialActionBurstShotsLeft <= 0)
+			SpecialAction::NotifyWeaponCycleFinished(pThis);
+	}
+
 	return 0;
 }
 
@@ -959,7 +991,17 @@ DEFINE_HOOK(0x6FF29E, TechnoClass_FireAt_ChargeTurret2, 0x6)
 	GET(const int, rearmDelay, EAX);
 	GET(WeaponTypeClass*, pWeapon, EBX);
 
+	// ChargeTurretDelay keeps the value RearmDelay produced (D-31).
 	SetChargeTurretDelay(pThis, rearmDelay, pWeapon);
+
+	// SweepFire: the engine stores EAX into RearmTimer right after this hook, so
+	// replacing it with the sweep's duration plus its cooldown makes the weapon
+	// look busy for the whole sweep and keeps the attack cursor and the AI honest
+	// (D-23). This must happen after SetChargeTurretDelay, which may clobber EAX.
+	const int sweepRearm = TechnoExt::Fetch(pThis)->GetSweepFireRearmTime(pWeapon);
+
+	if (sweepRearm >= 0)
+		R->EAX(sweepRearm);
 
 	return SkipGameCode;
 }
@@ -1044,6 +1086,8 @@ DEFINE_HOOK(0x6F3AEB, TechnoClass_GetFLH, 0x6)
 			if (pThis->CurrentBurstIndex % 2 != 0)
 				flh.Y = -flh.Y;
 		}
+
+		TechnoExt::Fetch(pThis)->LastWeaponFLH = flh;
 	}
 	else
 	{
@@ -1054,6 +1098,14 @@ DEFINE_HOOK(0x6F3AEB, TechnoClass_GetFLH, 0x6)
 
 		if (!pTypeExt->AlternateFLH_OnTurret.Get(RulesExt::Global()->AlternateFLH_OnTurret))
 			allowOnTurret = false;
+
+		auto pCurrentPassenger = pThis->Passengers.GetFirstPassenger();
+
+		for (int i = 0; i < index && pCurrentPassenger; i++)
+			pCurrentPassenger = abstract_cast<FootClass*>(pCurrentPassenger->NextObject);
+
+		if (pCurrentPassenger)
+			TechnoExt::Fetch(pCurrentPassenger)->LastWeaponFLH = flh;
 	}
 
 	int turIdx = -1;

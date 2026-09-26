@@ -46,6 +46,506 @@ namespace
 			}
 		}
 	}
+
+	// One row of the SpecialAction grammar: the spelling accepted after
+	// "SpecialAction=", the canonical spelling used in that action's own parameter
+	// key ("SpecialAction.DeployFire=") and the behaviour it selects.
+	struct SpecialActionToken
+	{
+		const char* ININame;
+		const char* KeyName;
+		SpecialActionType Type;
+	};
+
+	constexpr SpecialActionToken SpecialActionTokens[] =
+	{
+		{ "none",        "None",        SpecialActionType::None },
+		{ "deploy",      "Deploy",      SpecialActionType::Deploy },
+		{ "deploysinto", "DeploysInto", SpecialActionType::DeploysInto },
+		{ "convert",     "Convert",     SpecialActionType::Convert },
+		{ "deployfire",  "DeployFire",  SpecialActionType::DeployFire },
+		{ "unload",      "Unload",      SpecialActionType::Unload },
+		{ "weapon",      "Weapon",      SpecialActionType::Weapon },
+		{ "superweapon", "SuperWeapon", SpecialActionType::SuperWeapon },
+		{ "attacheffect", "AttachEffect", SpecialActionType::AttachEffect },
+		{ "return",      "Return",      SpecialActionType::Return },
+	};
+
+	SpecialActionToken const* FindSpecialActionToken(const char* pName)
+	{
+		for (auto const& token : SpecialActionTokens)
+		{
+			if (_stricmp(pName, token.ININame) == 0)
+				return &token;
+		}
+
+		return nullptr;
+	}
+
+	SpecialActionToken const* FindSpecialActionToken(SpecialActionType type)
+	{
+		for (auto const& token : SpecialActionTokens)
+		{
+			if (token.Type == type)
+				return &token;
+		}
+
+		return nullptr;
+	}
+
+	// Called when an entry selected no action at all. A "<pKey>.<action>" key is a
+	// parameter, not a selector, so writing one without the plain key silently did
+	// nothing before - spell that out instead.
+	void WarnAboutOrphanParameterKey(INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		char keyBuffer[0x40];
+
+		for (auto const& token : SpecialActionTokens)
+		{
+			_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.%s", pKey, token.KeyName);
+
+			if (parser.ReadString(pSection, keyBuffer) && *parser.value())
+			{
+				Debug::INIParseFailed(pSection, keyBuffer, parser.value(),
+					"This key only supplies the parameter - select the action with the plain key first");
+
+				return;
+			}
+		}
+
+		// AttachEffect is the one action whose payload does not live under a single
+		// "<pKey>.AttachEffect" key but under four dotted sub-keys, so the loop above
+		// cannot see it. Report those too, or a mod that forgets the selector gets a
+		// silently dead action.
+		static constexpr const char* AttachEffectKeys[] =
+		{
+			"AttachEffect.AttachTypes",
+			"AttachEffect.DurationOverrides",
+			"AttachEffect.RemoveTypes",
+			"AttachEffect.RemoveGroups",
+		};
+
+		for (auto const* pSuffix : AttachEffectKeys)
+		{
+			_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.%s", pKey, pSuffix);
+
+			if (parser.ReadString(pSection, keyBuffer) && *parser.value())
+			{
+				Debug::INIParseFailed(pSection, keyBuffer, parser.value(),
+					"This key only supplies the parameter - select the action with the plain key first");
+
+				return;
+			}
+		}
+	}
+
+	// Reads the four parameter keys of the AttachEffect action.
+	//
+	// It deliberately does NOT call AEAttachInfoTypeClass::LoadFromINI. That helper
+	// reads thirteen keys, nine of which cannot do anything for this action: the
+	// cumulative group is inert for non-cumulative effects, the remove counts only
+	// matter for cumulative ones, and the delay group is only filled in for
+	// self-owned effects. Reading them anyway would let a future upstream change to
+	// one of those keys silently alter this action, so this names exactly what it
+	// supports - and nothing else is ever set.
+	void ReadSpecialActionAttachEffect(INI_EX& parser, const char* pSection, const char* pKey, SpecialActionData& dst)
+	{
+		char keyBuffer[0x60];
+
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.AttachEffect.AttachTypes", pKey);
+		dst.AttachEffect.AttachTypes.Read(parser, pSection, keyBuffer);
+
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.AttachEffect.DurationOverrides", pKey);
+		dst.AttachEffect.DurationOverrides.Read(parser, pSection, keyBuffer);
+
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.AttachEffect.RemoveTypes", pKey);
+		dst.AttachEffect.RemoveTypes.Read(parser, pSection, keyBuffer);
+
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.AttachEffect.RemoveGroups", pKey);
+		parser.ParseStringList(dst.AttachEffect.RemoveGroups, pSection, keyBuffer);
+	}
+
+	// Parses one <pKey> entry and its companion keys.
+	//
+	// The action is selected by "<pKey>"; its parameter may come from either form,
+	// and the action's own key wins:
+	//
+	//   SpecialAction=DeployFire,1          ; inline parameter
+	//   SpecialAction.DeployFire=1          ; the action's own key
+	//
+	// The deploy actions read their parameter from here instead of from the type's
+	// vanilla deploy keys, so an ability no longer has to borrow - and therefore
+	// disturb - DeployFire / DeployFireWeapon / DeploysInto. Those keys stay free
+	// for the vanilla Deploy hotkey.
+	//
+	// The destination is only touched once the value is understood, so a map INI
+	// overriding just the action keeps the companion keys of the type's own entry.
+	//
+	// pBase is the regular SpecialAction entry while the elite one is parsed. It
+	// lets an elite block that only overrides a parameter (or only the cooldown)
+	// inherit the base action instead of being silently dropped.
+	void ReadSpecialAction(INI_EX& parser, const char* pSection, const char* pKey, SpecialActionData& dst, const SpecialActionData* pBase = nullptr)
+	{
+		auto trim = [](char* pStr) -> char*
+		{
+			while (*pStr == ' ' || *pStr == '\t')
+				++pStr;
+
+			char* pEnd = pStr + strlen(pStr);
+			while (pEnd > pStr && (pEnd[-1] == ' ' || pEnd[-1] == '\t'))
+				*--pEnd = '\0';
+
+			return pStr;
+		};
+
+		// A bare number in a parameter means a slot/index, not a type id.
+		auto isNumber = [](const char* pStr) -> bool
+		{
+			if (!pStr || !*pStr)
+				return false;
+
+			for (; *pStr; ++pStr)
+			{
+				if (*pStr < '0' || *pStr > '9')
+					return false;
+			}
+
+			return true;
+		};
+
+		char keyBuffer[0x40];
+		char value[0x100] = "";
+		char paramValue[0x60] = "";
+		char* pInlineParam = nullptr;
+		bool anyOverride = false;
+		SpecialActionToken const* pToken = nullptr;
+
+		bool const hasSelector = parser.ReadString(pSection, pKey) != 0;
+
+		if (hasSelector)
+		{
+			strncpy_s(value, parser.value(), _TRUNCATE);
+
+			char* pParam = strchr(value, ',');
+			if (pParam)
+				*pParam++ = '\0';
+
+			char* const pName = trim(value);
+			pInlineParam = pParam ? trim(pParam) : nullptr;
+
+			pToken = FindSpecialActionToken(pName);
+
+			if (!pToken)
+			{
+				Debug::INIParseFailed(pSection, pKey, pName, "Expected a SpecialAction type");
+				return;
+			}
+		}
+		else if (pBase && pBase->Action != SpecialActionType::None)
+		{
+			// An elite block without an action of its own: inherit the base action so
+			// that parameter and cooldown overrides still apply. Whether anything was
+			// actually overridden is checked after the companion keys below.
+			pToken = FindSpecialActionToken(pBase->Action);
+		}
+		else
+		{
+			// Nothing selected the action, so an action parameter key would have
+			// nowhere to go.
+			WarnAboutOrphanParameterKey(parser, pSection, pKey);
+			return;
+		}
+
+		if (!pToken)
+			return;
+
+		auto const action = pToken->Type;
+
+		// The action's own parameter key wins over the inline one.
+		char* pParam = pInlineParam;
+
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.%s", pKey, pToken->KeyName);
+
+		if (parser.ReadString(pSection, keyBuffer))
+		{
+			strncpy_s(paramValue, parser.value(), _TRUNCATE);
+			char* const pTrimmed = trim(paramValue);
+
+			if (*pTrimmed)
+			{
+				pParam = pTrimmed;
+				anyOverride = true;
+			}
+		}
+
+		SpecialActionData parsed;
+		parsed.Action = action;
+
+		// An inherited entry may leave its parameter out: the base entry supplies it.
+		bool const needsParam = hasSelector;
+
+		switch (action)
+		{
+		case SpecialActionType::Weapon:
+			// Either a registered weapon id, or a bare slot number. The slot form has
+			// to be accepted here too: the action resolves the parameter to one of
+			// the unit's own slots, and rejecting it at parse time would throw the
+			// whole entry away, silently disabling the ability.
+			if (!pParam || !*pParam)
+			{
+				if (needsParam)
+				{
+					Debug::INIParseFailed(pSection, pKey, "", "Expected a registered weapon id or a weapon slot number");
+					return;
+				}
+
+				break;
+			}
+
+			if (!isNumber(pParam) && !WeaponTypeClass::Find(pParam))
+			{
+				Debug::INIParseFailed(pSection, pKey, pParam, "Expected a registered weapon id or a weapon slot number");
+				return;
+			}
+
+			parsed.WeaponID = pParam;
+			break;
+
+		case SpecialActionType::DeployFire:
+			// The same parameter as Weapon, but optional: without it the ability
+			// falls back to the type's own deploy weapon definition.
+			if (pParam && *pParam)
+			{
+				if (!isNumber(pParam) && !WeaponTypeClass::Find(pParam))
+				{
+					Debug::INIParseFailed(pSection, pKey, pParam, "Expected a registered weapon id or a weapon slot number");
+					return;
+				}
+
+				parsed.WeaponID = pParam;
+			}
+			break;
+
+		case SpecialActionType::SuperWeapon:
+			if (!pParam || !*pParam)
+			{
+				if (needsParam)
+				{
+					Debug::INIParseFailed(pSection, pKey, "", "Expected a registered super weapon id");
+					return;
+				}
+
+				break;
+			}
+
+			if (!SuperWeaponTypeClass::Find(pParam))
+			{
+				Debug::INIParseFailed(pSection, pKey, pParam, "Expected a registered super weapon id");
+				return;
+			}
+
+			parsed.SuperWeaponID = pParam;
+			break;
+
+		case SpecialActionType::Convert:
+			if (!pParam || !*pParam)
+			{
+				if (needsParam)
+				{
+					Debug::INIParseFailed(pSection, pKey, "", "Expected a registered techno type id");
+					return;
+				}
+
+				break;
+			}
+
+			if (!TechnoTypeClass::Find(pParam))
+			{
+				Debug::INIParseFailed(pSection, pKey, pParam, "Expected a registered techno type id");
+				return;
+			}
+
+			parsed.ConvertToID = pParam;
+			break;
+
+		case SpecialActionType::DeploysInto:
+			// Optional: without it the ability uses the type's own DeploysInto, which
+			// is what it did before this key existed.
+			if (pParam && *pParam)
+			{
+				if (!abstract_cast<BuildingTypeClass*>(TechnoTypeClass::Find(pParam)))
+				{
+					Debug::INIParseFailed(pSection, pKey, pParam, "Expected a registered building type id");
+					return;
+				}
+
+				parsed.DeploysIntoID = pParam;
+			}
+			break;
+
+		case SpecialActionType::AttachEffect:
+			// The action has no inline parameter: its payload is the four dotted
+			// sub-keys, and those are read from the base block only.
+			//
+			// An elite block that explicitly selects AttachEffect would carry no
+			// payload to go with it and would make the ability do nothing at all, so
+			// reject it and leave the elite entry as None. GetData then falls back to
+			// the base entry, i.e. the elite unit simply keeps the normal ability.
+			// An elite block that only inherits the base action (no selector, e.g.
+			// EliteSpecialActionROF) is not rejected - see the pBase check below.
+			if (pBase)
+			{
+				if (hasSelector)
+				{
+					Debug::INIParseFailed(pSection, pKey, value, "AttachEffect does not support an elite variant");
+					return;
+				}
+
+				break;
+			}
+
+			ReadSpecialActionAttachEffect(parser, pSection, pKey, parsed);
+
+			// An action that names nothing to attach and nothing to strip would do
+			// nothing on every press, which is almost always an INI mistake.
+			if (parsed.AttachEffect.AttachTypes.empty()
+				&& parsed.AttachEffect.RemoveTypes.empty()
+				&& parsed.AttachEffect.RemoveGroups.empty())
+			{
+				Debug::INIParseFailed(pSection, pKey, value,
+					"Expected at least one of SpecialAction.AttachEffect.AttachTypes, .RemoveTypes or .RemoveGroups");
+				return;
+			}
+
+			break;
+
+		default:
+			break;
+		}
+
+		// SuperWeapon has two more parameters: where the launch aims and where the
+		// super weapon comes from. Both are read after the action is known because
+		// no other action uses them.
+		if (action == SpecialActionType::SuperWeapon)
+		{
+			_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.SuperWeaponTarget", pKey);
+
+			if (parser.ReadString(pSection, keyBuffer))
+			{
+				char targetValue[0x20];
+				strncpy_s(targetValue, parser.value(), _TRUNCATE);
+				char* const pTargetName = trim(targetValue);
+
+				if (*pTargetName)
+				{
+					if (_stricmp(pTargetName, "unit") == 0)
+						parsed.Aim = SpecialActionAim::Unit;
+					else if (_stricmp(pTargetName, "self") == 0)
+						parsed.Aim = SpecialActionAim::Self;
+					else if (_stricmp(pTargetName, "empty") == 0)
+						parsed.Aim = SpecialActionAim::Empty;
+					else
+					{
+						Debug::INIParseFailed(pSection, keyBuffer, pTargetName, "Expected unit, self or empty");
+						return;
+					}
+
+					anyOverride = true;
+				}
+			}
+
+			// Third parameter of SuperWeapon: where the super weapon comes from.
+			// "house" is the behaviour the action already had, so an entry that does
+			// not write the key keeps launching the house's own super weapon.
+			_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.SuperWeaponSource", pKey);
+
+			if (parser.ReadString(pSection, keyBuffer))
+			{
+				char sourceValue[0x20];
+				strncpy_s(sourceValue, parser.value(), _TRUNCATE);
+				char* const pSourceName = trim(sourceValue);
+
+				if (*pSourceName)
+				{
+					if (_stricmp(pSourceName, "house") == 0)
+						parsed.Source = SpecialActionSource::House;
+					else if (_stricmp(pSourceName, "unit") == 0)
+						parsed.Source = SpecialActionSource::Unit;
+					else
+					{
+						Debug::INIParseFailed(pSection, keyBuffer, pSourceName, "Expected house or unit");
+						return;
+					}
+
+					anyOverride = true;
+				}
+			}
+		}
+
+		// Companion keys, independent of the action chosen above.
+		Nullable<int> rof;
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%sROF", pKey);
+		rof.Read(parser, pSection, keyBuffer);
+
+		if (rof.isset())
+		{
+			parsed.ROF = rof.Get();
+			anyOverride = true;
+		}
+
+		// Key-press acknowledgement, the same idea as VoiceDeploy. Falls back to the
+		// type's own VoiceSpecialAttack when unset.
+		ValueableIdx<VocClass> voice;
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.Voice", pKey);
+		voice.Read(parser, pSection, keyBuffer);
+
+		if (voice.Get() >= 0)
+		{
+			parsed.Voice = voice.Get();
+			anyOverride = true;
+		}
+
+		// Positional key-press effect, independent of Voice: Voice is the unit's own
+		// voice and goes through the voice queue, Sound is played at the unit like
+		// any other sound effect. Either may be set on its own.
+		ValueableIdx<VocClass> effect;
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.Sound", pKey);
+		effect.Read(parser, pSection, keyBuffer);
+
+		if (effect.Get() >= 0)
+		{
+			parsed.Sound = effect.Get();
+			anyOverride = true;
+		}
+
+		ValueableIdx<VocClass> sound;
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.NotReadySound", pKey);
+		sound.Read(parser, pSection, keyBuffer);
+
+		if (sound.Get() >= 0)
+		{
+			parsed.NotReadySound = sound.Get();
+			anyOverride = true;
+		}
+
+		// PhobosFixedString has no INI_EX overload, so read it through the parser
+		// interface and copy the result over.
+		_snprintf_s(keyBuffer, sizeof(keyBuffer), "%s.NotReadyMessage", pKey);
+
+		if (parser.ReadString(pSection, keyBuffer))
+		{
+			parsed.NotReadyMessage = parser.value();
+			anyOverride = true;
+		}
+
+		// An elite block that named no action of its own and overrode nothing at all
+		// is simply absent; leaving the destination alone makes GetData fall back to
+		// the regular entry.
+		if (!hasSelector && !anyOverride)
+			return;
+
+		dst = std::move(parsed);
+	}
 }
 
 bool TechnoTypeExt::SelectWeaponMutex = false;
@@ -988,6 +1488,11 @@ void TechnoTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->SelectBox.Read(exINI, pSection, "SelectBox");
 	this->HideSelectBox.Read(exINI, pSection, "HideSelectBox");
 
+	this->SpecialActionPipOffset.Read(exINI, pSection, "SpecialActionPipOffset");
+	this->SpecialActionPipSegments.Read(exINI, pSection, "SpecialActionPipSegments");
+	this->SpecialActionPipFrame.Read(exINI, pSection, "SpecialActionPipFrame");
+	this->SpecialActionPipEmptyFrame.Read(exINI, pSection, "SpecialActionPipEmptyFrame");
+
 	this->AmmoPipFrame.Read(exINI, pSection, "AmmoPipFrame");
 	this->EmptyAmmoPipFrame.Read(exINI, pSection, "EmptyAmmoPipFrame");
 	this->AmmoPipWrapStartFrame.Read(exINI, pSection, "AmmoPipWrapStartFrame");
@@ -1422,6 +1927,11 @@ void TechnoTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	// VoiceIFVRepair from Ares 0.2
 	this->VoiceIFVRepair.Read(exINI, pSection, "VoiceIFVRepair");
 	this->ParseVoiceWeaponAttacks(exINI, pSection, this->VoiceWeaponAttacks, this->VoiceEliteWeaponAttacks);
+
+	ReadSpecialAction(exINI, pSection, "SpecialAction", this->SpecialAction);
+	// The base entry is handed over so that an elite block which only overrides a
+	// parameter (or only the cooldown) still knows which action it belongs to.
+	ReadSpecialAction(exINI, pSection, "EliteSpecialAction", this->EliteSpecialAction, &this->SpecialAction);
 }
 
 template <typename T>
@@ -1624,6 +2134,11 @@ void TechnoTypeExt::Serialize(T& Stm)
 		.Process(this->SelectBox)
 		.Process(this->HideSelectBox)
 
+		.Process(this->SpecialActionPipOffset)
+		.Process(this->SpecialActionPipSegments)
+		.Process(this->SpecialActionPipFrame)
+		.Process(this->SpecialActionPipEmptyFrame)
+
 		.Process(this->AmmoPipFrame)
 		.Process(this->EmptyAmmoPipFrame)
 		.Process(this->AmmoPipWrapStartFrame)
@@ -1804,6 +2319,9 @@ void TechnoTypeExt::Serialize(T& Stm)
 		.Process(this->JumpjetClimbIgnoreBuilding)
 
 		.Process(this->Unsellable)
+
+		.Process(this->SpecialAction)
+		.Process(this->EliteSpecialAction)
 
 		.Process(this->ExtraThreat_Enabled)
 		.Process(this->ExtraThreat_IsThreat)

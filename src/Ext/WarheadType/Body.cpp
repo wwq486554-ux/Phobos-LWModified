@@ -334,6 +334,24 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->JumpjetNoWobbles.Read(exINI, pSection, "JumpjetNoWobbles");
 	this->JumpjetDeviation.Read(exINI, pSection, "JumpjetDeviation");
 
+	// LocomotorWeapon (only meaningful together with IsLocomotor=yes)
+	this->LocomotorWeapon_Mode.Read(exINI, pSection, "LocomotorWeapon.Mode");
+	this->LocomotorWeapon_Speed.Read(exINI, pSection, "LocomotorWeapon.Speed");
+	this->LocomotorWeapon_Height.Read(exINI, pSection, "LocomotorWeapon.Height");
+	this->LocomotorWeapon_ClimbRate.Read(exINI, pSection, "LocomotorWeapon.ClimbRate");
+	this->LocomotorWeapon_DescendRate.Read(exINI, pSection, "LocomotorWeapon.DescendRate");
+	this->LocomotorWeapon_StopDistance.Read(exINI, pSection, "LocomotorWeapon.StopDistance");
+	this->LocomotorWeapon_Duration.Read(exINI, pSection, "LocomotorWeapon.Duration");
+	this->LocomotorWeapon_EndOnArrival.Read(exINI, pSection, "LocomotorWeapon.EndOnArrival");
+	this->LocomotorWeapon_EndAction.Read(exINI, pSection, "LocomotorWeapon.EndAction");
+	this->LocomotorWeapon_ReleaseOnFirerStop.Read(exINI, pSection, "LocomotorWeapon.ReleaseOnFirerStop");
+	this->LocomotorWeapon_FallingDamage.Read(exINI, pSection, "LocomotorWeapon.FallingDamage");
+	this->LocomotorWeapon_MeteorDamage.Read(exINI, pSection, "LocomotorWeapon.MeteorDamage");
+	this->LocomotorWeapon_Anim.Read(exINI, pSection, "LocomotorWeapon.Anim");
+	this->LocomotorWeapon_MeteorAnim.Read(exINI, pSection, "LocomotorWeapon.MeteorAnim");
+	this->LocomotorWeapon_AllowedTypes.Read(exINI, pSection, "LocomotorWeapon.AllowedTypes");
+	this->LocomotorWeapon_DisallowedTypes.Read(exINI, pSection, "LocomotorWeapon.DisallowedTypes");
+
 	this->Nonprovocative.Read(exINI, pSection, "Nonprovocative");
 
 	this->MergeBuildingDamage.Read(exINI, pSection, "MergeBuildingDamage");
@@ -744,6 +762,23 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->JumpjetWobbles)
 		.Process(this->JumpjetNoWobbles)
 		.Process(this->JumpjetDeviation)
+
+		.Process(this->LocomotorWeapon_Mode)
+		.Process(this->LocomotorWeapon_Speed)
+		.Process(this->LocomotorWeapon_Height)
+		.Process(this->LocomotorWeapon_ClimbRate)
+		.Process(this->LocomotorWeapon_DescendRate)
+		.Process(this->LocomotorWeapon_StopDistance)
+		.Process(this->LocomotorWeapon_Duration)
+		.Process(this->LocomotorWeapon_EndOnArrival)
+		.Process(this->LocomotorWeapon_EndAction)
+		.Process(this->LocomotorWeapon_ReleaseOnFirerStop)
+		.Process(this->LocomotorWeapon_FallingDamage)
+		.Process(this->LocomotorWeapon_MeteorDamage)
+		.Process(this->LocomotorWeapon_Anim)
+		.Process(this->LocomotorWeapon_MeteorAnim)
+		.Process(this->LocomotorWeapon_AllowedTypes)
+		.Process(this->LocomotorWeapon_DisallowedTypes)
 
 		.Process(this->Nonprovocative)
 

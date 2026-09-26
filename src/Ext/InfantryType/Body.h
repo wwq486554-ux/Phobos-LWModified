@@ -28,6 +28,10 @@ public:
 	std::vector<std::vector<CoordStruct>> EliteDeployedWeaponBurstFLHs;
 	Nullable<bool> InfantryAutoDeploy;
 
+	// Per weapon index override of which firing animation group is played.
+	// -1 = unset (fall back to TechnoTypeExt::IsSecondary), 0 = primary (FireUp/FireProne), 1 = secondary (SecondaryFire/SecondaryProne).
+	ValueableVector<int> WeaponFireAnimations;
+
 	explicit InfantryTypeExt(InfantryTypeClass* const OwnerObject) : TechnoTypeExt(OwnerObject)
 		, Slaved_OwnerWhenMasterKilled { SlaveChangeOwnerType::Killer }
 		, SlavesFreeSound {}
@@ -41,6 +45,7 @@ public:
 		, DeployedPrimaryFireFLH {}
 		, DeployedSecondaryFireFLH {}
 		, InfantryAutoDeploy {}
+		, WeaponFireAnimations {}
 	{ }
 
 	InfantryTypeClass* OwnerObject() const
@@ -70,6 +75,11 @@ public:
 	virtual void LoadFromINIFile(CCINIClass* pINI) override;
 	virtual void LoadFromStream(PhobosStreamReader& Stm) override;
 	virtual void SaveToStream(PhobosStreamWriter& Stm) override;
+
+	// Returns whether the weapon index plays the secondary firing animation group.
+	// Falls back to TechnoTypeExt::IsSecondary when no per-weapon override is set.
+	bool IsSecondaryFireAnim(int nWeaponIndex) const;
+
 
 private:
 	template <typename T>

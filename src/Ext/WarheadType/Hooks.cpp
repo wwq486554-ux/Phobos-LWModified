@@ -2,6 +2,7 @@
 
 #include <Ext/Techno/Body.h>
 #include <Ext/Scenario/Body.h>
+#include <Locomotion/LocomotorWeaponLocomotionClass.h>
 
 #pragma region Detonation
 
@@ -21,7 +22,10 @@ DEFINE_HOOK(0x46920B, BulletClass_Detonate, 0x6)
 	return 0;
 }
 
-// Customize Jumpjet properties on warhead
+// IsLocomotor=yes warhead handling. Jumpjet keeps the vanilla pathway; every
+// other Locomotor= GUID is routed through the custom LocomotorWeapon locomotor,
+// which manages the whole magnetron state machine (including the cleanup that
+// vanilla never performs).
 DEFINE_HOOK(0x4696CE, BulletClass_Detonate_ImbueLocomotor, 0x6)
 {
 	enum { SkipGameCode = 0x469AA4 };
@@ -29,9 +33,73 @@ DEFINE_HOOK(0x4696CE, BulletClass_Detonate_ImbueLocomotor, 0x6)
 	GET(BulletClass* const, pBullet, ESI);
 	GET(FootClass* const, pTarget, EDI);
 	const auto pWH = pBullet->WH;
+	const auto pWHExt = WarheadTypeExt::Fetch(pWH);
 
 	WarheadTypeExt::LocomotorWarhead = pWH;
-	pBullet->Owner->ImbueLocomotor(pTarget, pWH->Locomotor);
+
+	const CLSID requestedCLSID = pWH->Locomotor;
+	const auto mode = pWHExt->LocomotorWeapon_Mode.Get(LocoWeaponMode::Auto);
+
+	// LocomotorWeapon.AllowedTypes / DisallowedTypes: the warhead simply does
+	// nothing on these targets.
+	const auto pTargetType = pTarget->GetTechnoType();
+
+	const bool disallowed = pWHExt->LocomotorWeapon_DisallowedTypes.Contains(pTargetType)
+		|| (!pWHExt->LocomotorWeapon_AllowedTypes.empty()
+			&& !pWHExt->LocomotorWeapon_AllowedTypes.Contains(pTargetType));
+
+	// A1: IsLocomotor=yes stays the only entry point, and there is no global
+	// switch - Jumpjet is always reachable by simply writing its GUID. B3: an
+	// explicitly requested Mode= wins over the GUID.
+	const bool vanillaJumpjet = mode == LocoWeaponMode::Jumpjet
+		|| (mode == LocoWeaponMode::Auto && LocomotorWeapon::IsJumpjetCLSID(requestedCLSID));
+
+	if (vanillaJumpjet)
+	{
+		pBullet->Owner->ImbueLocomotor(pTarget, requestedCLSID);
+	}
+	else if (!disallowed)
+	{
+		LocomotorWeaponConfig config;
+		config.Mode = mode;
+		config.EndAction = pWHExt->LocomotorWeapon_EndAction.Get(LocoWeaponEndAction::Restore);
+		config.Speed = pWHExt->LocomotorWeapon_Speed.Get(-1);
+		config.Height = pWHExt->LocomotorWeapon_Height.Get(-1);
+		config.ClimbRate = pWHExt->LocomotorWeapon_ClimbRate.Get(-1);
+		config.DescendRate = pWHExt->LocomotorWeapon_DescendRate.Get(-1);
+		config.StopDistance = pWHExt->LocomotorWeapon_StopDistance.Get(-1);
+		config.Duration = pWHExt->LocomotorWeapon_Duration.Get(-1);
+		config.EndOnArrival = pWHExt->LocomotorWeapon_EndOnArrival.Get(false);
+		config.ReleaseOnFirerStop = pWHExt->LocomotorWeapon_ReleaseOnFirerStop.Get(true);
+		config.FallingDamage = pWHExt->LocomotorWeapon_FallingDamage.Get(true);
+		config.MeteorDamage = pWHExt->LocomotorWeapon_MeteorDamage.Get(-1);
+		config.AnimIndex = pWHExt->LocomotorWeapon_Anim.Get(-1);
+		config.MeteorAnimIndex = pWHExt->LocomotorWeapon_MeteorAnim.Get(-1);
+
+		// Indices instead of pointers: the config is written to savegames raw.
+		if (pWH->ID)
+			config.WarheadIndex = WarheadTypeClass::FindIndex(pWH->ID);
+
+		LocomotorWeapon::CurrentRequestedCLSID = requestedCLSID;
+		LocomotorWeapon::CurrentConfig = config;
+		LocomotorWeapon::Applying = true;
+
+		// ImbueLocomotor's bookkeeping (occupation bits, Force_Track,
+		// FrozenStill, the LocomotorSource/Target links, mission changes, ...)
+		// is exactly what we want, so temporarily point the shared warhead type
+		// at our class instead of reimplementing any of it. Begin_Piggyback
+		// runs synchronously inside this call, which is what makes the globals
+		// above readable by the new locomotor.
+		const CLSID savedCLSID = pWH->Locomotor;
+		pWH->Locomotor = __uuidof(LocomotorWeaponLocomotionClass);
+		pBullet->Owner->ImbueLocomotor(pTarget, pWH->Locomotor);
+		pWH->Locomotor = savedCLSID;
+
+		LocomotorWeapon::Applying = false;
+		LocomotorWeapon::CurrentRequestedCLSID = CLSID { };
+		LocomotorWeapon::CurrentConfig = LocomotorWeaponConfig { };
+	}
+
 	WarheadTypeExt::LocomotorWarhead = nullptr;
 	return SkipGameCode;
 }

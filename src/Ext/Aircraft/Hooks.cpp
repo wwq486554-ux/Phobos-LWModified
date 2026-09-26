@@ -1,7 +1,11 @@
 #include "Body.h"
 
+#include <Kamikaze.h>
+#include <cmath>
+
 #include <EventClass.h>
 
+#include <Ext/Aircraft/AdvancedMissions.h>
 #include <Ext/AircraftType/Body.h>
 #include <Ext/Anim/Body.h>
 #include <Ext/WeaponType/Body.h>
@@ -482,14 +486,8 @@ static bool __fastcall AircraftTypeClass_CanUseWaypoint(AircraftTypeClass* pThis
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7E2908, AircraftTypeClass_CanUseWaypoint)
 
-static __forceinline int GetTurningRadius(AircraftClass* pThis)
-{
-	constexpr double epsilon = 1e-10;
-	constexpr double raw2Radian = Math::TwoPi / 65536;
-	// GetRadian<65536>() is an incorrect method
-	const double rotRadian = std::abs(static_cast<double>(pThis->PrimaryFacing.ROT.Raw) * raw2Radian);
-	return rotRadian > epsilon ? static_cast<int>(static_cast<double>(pThis->Type->Speed) / rotRadian) : 0;
-}
+// 机体自然转弯半径的公式只保留一处：AdvancedMissions::GetTurningRadius()
+// （定义在 AdvancedMissions.cpp），下面三处调用直接写全名。
 
 // Move: smooth the planning paths and returning route
 DEFINE_HOOK_AGAIN(0x4168C7, AircraftClass_Mission_Move_SmoothMoving, 0x5)
@@ -517,16 +515,166 @@ DEFINE_HOOK(0x416A0A, AircraftClass_Mission_Move_SmoothMoving, 0x5)
 
 	// When the horizontal distance between the aircraft and its destination is greater than half of its deceleration distance
 	// or its turning radius, continue to move forward, otherwise return to airbase or execute the next planning waypoint
-	const int turningRadius = GetTurningRadius(pThis);
+	const int turningRadius = AdvancedMissions::GetTurningRadius(pThis);
 
 	if (distance > std::max((pType->SlowdownDistance / 2), turningRadius))
 		return (R->Origin() == 0x4168C7 ? ContinueMoving1 : ContinueMoving2);
+
+	// AdvancedAircraftMissions: loiter on arrival instead of returning to base.
+	//
+	// Only reached when the aircraft is already within max(SlowdownDistance/2, turning radius)
+	// of its destination. A planning waypoint chain is still followed first: the next node has
+	// to be consumed exactly once here (the vanilla code below relies on the same short-circuit
+	// order), and only the true end of the chain - or a plain single move order - starts the
+	// loiter. Everything else keeps the pre-existing behaviour untouched.
+	if (extendedMissions && AdvancedMissions::Enabled(pType))
+	{
+		const bool hasNextPlanningNode = pThis->TryNextPlanningTokenNode();
+		const bool chainFinished = !hasNextPlanningNode && pThis->QueuedMission != Mission::Area_Guard;
+
+		if (chainFinished)
+		{
+			// AdvancedAircraftMissions: "把飞机已经停在的那个格子再点一次"是一次
+			// 零距离移动订单。引擎可能把目的地改成飞机自身、或在到位后不再保留
+			// 目的地，于是 TryBeginLoiter(pThis->Destination) 失败，代码就掉进
+			// EnterIdleMode —— 也就是"已经悬停的飞机被再点一次就自己飞回家"
+			// （实机症状）。盘旋机型在这种原地订单下应当继续盘旋，所以目的地
+			// 不合法时依次回退到"原盘旋圆心"和"当前所在格"，绝不让它返航。
+			AbstractClass* pCenter = pThis->Destination;
+
+			if (!pCenter || pCenter == pThis)
+				pCenter = pThis->ArchiveTarget;
+
+			if (!pCenter || pCenter == pThis)
+				pCenter = MapClass::Instance.TryGetCellAt(pThis->GetCoords());
+
+			if (pCenter && AdvancedMissions::TryBeginLoiter(pThis, pCenter))
+				return EnterIdleAndReturn;
+
+			pThis->EnterIdleMode(false, true);
+		}
+
+		return EnterIdleAndReturn;
+	}
 
 	// Try next planning waypoint first, then return to air base if it does not exist or cannot be taken
 	if (!extendedMissions || (!pThis->TryNextPlanningTokenNode() && pThis->QueuedMission != Mission::Area_Guard))
 		pThis->EnterIdleMode(false, true);
 
 	return EnterIdleAndReturn;
+}
+
+// AdvancedAircraftMissions: Mission_Move 的到位收尾（MissionStatus == 3）。
+//
+// 与 0x4168C7 / 0x416A0A 那两个钩子同一套判据，但覆盖另一条**绕过它们**的路径：
+// status 2 里引擎先判"飞控还在动吗"（0x4168A7），**不动就把 MissionStatus 直接置 3**
+// （0x4168AC → 0x416AB6），于是 status 3 再判一次不动就 `EnterIdleMode`（0x4169B2）
+// → 目的地改写成机场 → 回家。目的地 == 当前所在格时飞控不会动，正好落进这条。
+//
+// 它和飞控里那个"放弃判定"（见下面的 FlyLocomotion_MoveTo_AbortReturn）是同一个
+// 实机症状的两条腿：飞控那条先被拦住，拦完之后流程走到这里，由这个钩子重新开盘旋。
+// 跳到 0x416AC0 是 Mission_Move 自己的收尾（`pop edi/pop esi/pop ebp/mov eax,1/.../ret`），
+// 栈是平衡的 —— 这一点和上面那个飞控钩子不同，别照抄。
+DEFINE_HOOK(0x41698E, AircraftClass_Mission_Move_StoppedArrival, 0x6)
+{
+	enum { EnterIdleAndReturn = 0x416AC0 };
+
+	GET(AircraftClass* const, pThis, ESI);
+
+	if (pThis->Team || pThis->Airstrike || pThis->IsALoaner)
+		return 0;
+
+	const auto pType = pThis->Type;
+
+	if (!pType->AirportBound)
+		return 0;
+
+	const bool extendedMissions = AircraftTypeExt::Fetch(pType)->ExtendedAircraftMissions.Get(RulesExt::Global()->ExtendedAircraftMissions);
+
+	if (!AircraftTypeExt::Fetch(pType)->ExtendedAircraftMissions_SmoothMoving.Get(extendedMissions))
+		return 0;
+
+	if (extendedMissions && AdvancedMissions::Enabled(pType) && pThis->Destination)
+	{
+		// 与 0x4168C7 相同的"到位"判据：只有确实在目的地附近才接管；
+		// status 3 也可能因为"被挡住动不了"而到达，那种情况保持原版。
+		const auto coords = pThis->Destination->GetCoords();
+		const int distance = static_cast<int>(Point2D { coords.X, coords.Y }
+			.DistanceFrom(Point2D { pThis->Location.X, pThis->Location.Y }));
+
+		if (distance <= Math::max((pType->SlowdownDistance / 2), AdvancedMissions::GetTurningRadius(pThis)))
+		{
+			// 先推进路径点（和 0x4168C7 一致），链没走完就让引擎继续飞。
+			if (pThis->TryNextPlanningTokenNode())
+				return EnterIdleAndReturn;
+
+			AbstractClass* const pCenter = pThis->Destination ? pThis->Destination : pThis->ArchiveTarget;
+
+			if (pCenter && AdvancedMissions::TryBeginLoiter(pThis, pCenter))
+				return EnterIdleAndReturn;
+		}
+	}
+
+	return 0;
+}
+
+// AdvancedAircraftMissions: 飞控里的"这次移动到此为止 → 回机场"分支。
+//
+// ★★ 这才是"飞机已经停在目标格上，再点一次同一格 → 它自己飞回家"的真正病根
+//    （第六轮实机日志定案：EnterIdleMode 的 caller = 0x004CFADC）。
+//
+// 调用链（全部在 SmoothMoving 的两个钩子 0x4168C7 / 0x416A0A **之前**）：
+//
+//   AircraftClass::Mission_Move status 1（0x416769）
+//     └ 0x4167B4  call [loco+0x44]        = FlyLocomotionClass::Move_To（0x4CCC80）
+//         └ 0x4CCDDB call 0x4CFA70        = "还能不能/要不要继续这次移动" 的判定
+//             ├ 0x4CFA79 call [obj+0x184] = MissionClass::GetCurrentMission()
+//             │    == 7 (Enter) → 继续判；否则先看 0x705D60 = TryNextPlanningTokenNode()
+//             │    （有下一个路径点就直接收工，不回家）
+//             ├ 0x4CFAA6 test [pType+0xE0D]        （机型标志）
+//             ├ 0x4CFAC5 call 0x65AD50            （列表成员判定）
+//             └ 0x4CFAD6 call [aircraft+0x484]    ← EnterIdleMode(false,1) → 回家
+//
+// 目的地 == 飞机当前所在格时，玩家再点同一格 ⇒ Move_To 走到这个"放弃"判定 ⇒
+// EnterIdleMode ⇒ TryNearestDockBuilding + SetDestination(机场) —— 实机看到的就是
+// "目的地标记从脚下的格子跳到机场上"。因为它在钩子之前，本功能**一行日志都打不到**。
+//
+// ★ 挂钩位置的选择（踩过坑，别再改回 0x4CFAD6）：
+//   0x4CFAD0/0x4CFAD2 先 `push 1` / `push 0` 给 EnterIdleMode（`ret 8` 由被调者弹栈），
+//   所以**跳过 0x4CFAD6 那次调用会留下 8 字节垃圾**，0x4CFADC 的
+//   `pop edi / pop esi / ret` 全部错位 → 直接跳到 Eip=0（2026-09-25 实测崩过一次，
+//   snapshot-20260925-134051：崩溃前最后一条日志就是 `fly MoveTo abort -> re-loiter`）。
+//   因此改挂在**栈平衡**的 `0x4CFAB4`（`call [edx+0x1BC]`，此时没有任何临时 push），
+//   接管后跳到引擎自带的"不回家"出口 `0x4CFADF`（清 3 个标志 + `pop edi/pop esi/ret`），
+//   栈与副作用都与原路一致。
+//
+// ★ 这里**只阻止放弃**、不写任何本功能状态：本钩子在飞控栈内，若在这里调
+//   `TryBeginLoiter` → `SetDestination`，可能再次绕回 Move_To / 本函数造成重入。
+//   真正"重开盘旋"交给两道栈安全的路径，覆盖两种可能：
+//     * 按 0x41698E（Mission_Move 的到位收尾 status 3）——见下面的钩子；
+//     * 否则飞控仍在动，会照常走到 0x4168C7 的原有钩子。
+DEFINE_HOOK(0x4CFAB4, FlyLocomotion_MoveTo_AbortReturn, 0x6)
+{
+	enum { ContinueVanillaMove = 0x4CFADF };
+
+	GET(TechnoClass* const, pTechno, EDI);
+
+	// 飞控的宿主不一定是飞机（VehicleType 也能配 Locomotor=Fly），必须按 WhatAmI 判。
+	auto const pAircraft = abstract_cast<AircraftClass*, true>(pTechno);
+
+	if (pAircraft
+		&& AdvancedMissions::Enabled(pAircraft->Type)
+		&& AdvancedMissions::HasAmmo(pAircraft)
+		&& AdvancedMissions::GetLoiterRadius(pAircraft->Type) > 0
+		&& pAircraft->Destination
+		// 目的地在自家停机设施上时**不要拦**：那正是"回家/降落"流程，
+		// 此处 abort（EnterIdleMode → 找最近机场）本来就是它要的结果。
+		&& !AdvancedMissions::IsOwnDockBuilding(pAircraft, pAircraft->Destination))
+	{
+		return ContinueVanillaMove;
+	}
+
+	return 0;
 }
 
 DEFINE_HOOK(0x4DDD66, FootClass_IsLandZoneClear_ReplaceHardcode, 0x6) // To avoid that the aircraft cannot fly towards the water surface normally
@@ -614,7 +762,7 @@ DEFINE_HOOK(0x4CF190, FlyLocomotionClass_FlightUpdate_SetPrimaryFacing, 0x6) // 
 			if (pAircraft->Destination && (pAircraft->DockNowHeadingTo == pAircraft->Destination || pAircraft->SpawnOwner == pAircraft->Destination))
 			{
 				// Like smooth moving
-				const int turningRadius = GetTurningRadius(pAircraft);
+				const int turningRadius = AdvancedMissions::GetTurningRadius(pAircraft);
 
 				// diameter = 2 * radius
 				const int cellCounts = Math::max((pAircraft->Type->SlowdownDistance / Unsorted::LeptonsPerCell), (turningRadius / 128));
@@ -736,6 +884,12 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 {
 	GET(AircraftClass* const, pThis, ESI);
 
+	// Missile.Homing: 每帧刷新制导瞄准 / 对空接近自爆
+	AircraftExt::UpdateMissileHoming(pThis);
+
+	// AdvancedAircraftMissions: 记录击杀点 + 收尾返航提速窗口（每台机同帧一致）
+	AdvancedMissions::Update(pThis);
+
 	const auto pType = pThis->Type;
 
 	if (pThis->IsAlive && pType->AirportBound && !pThis->Airstrike && !pThis->IsALoaner)
@@ -747,8 +901,12 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 			// Check area guard range
 			if (const auto pArchive = pThis->ArchiveTarget)
 			{
+				// AdvancedAircraftMissions: 盘旋半径大于 GuardRange 时，原来的 1.1x GuardRange
+				// leash 会把飞机从自己盘旋圈的边缘反复拽回圆心。让 leash 至少覆盖盘旋半径。
+				const int leashBase = Math::max(pThis->GetGuardRange(1), AdvancedMissions::GetLoiterRadius(pType));
+
 				if (pThis->Target && !pThis->IsFiring && !pThis->IsLocked
-					&& pThis->DistanceFrom3D(pArchive) > static_cast<int>(pThis->GetGuardRange(1) * 1.1))
+					&& pThis->DistanceFrom3D(pArchive) > static_cast<int>(leashBase * 1.1))
 				{
 					pThis->SetTarget(nullptr);
 					pThis->SetDestination(pArchive, true);
@@ -848,11 +1006,75 @@ DEFINE_HOOK(0x41A96C, AircraftClass_Mission_AreaGuard, 0x6)
 	auto hoverOverArchive = [pThis](const CoordStruct& coords, AbstractClass* pDest)
 	{
 		const auto& location = pThis->Location;
-		const int turningRadius = GetTurningRadius(pThis);
+		const int turningRadius = AdvancedMissions::GetTurningRadius(pThis);
+
+		// AdvancedAircraftMissions: the loiter radius key and the LoiterMode key both drive
+		// the ordinary Ctrl+Alt area guard hover as well - the two deliberately share this
+		// one hover driver. Not configured / feature disabled => GetLoiterRadius() is 0,
+		// LoiterHover() is false, max() keeps the original turning radius, i.e. behaviour is
+		// unchanged verbatim.
+		const int radius = Math::max(turningRadius, AdvancedMissions::GetLoiterRadius(pThis->Type));
 		const double distance = Math::max(1.0, Point2D { coords.X, coords.Y }.DistanceFrom(Point2D { location.X, location.Y }));
 
+		// AdvancedAircraftMissions: LoiterMode=hover - stay put like a helicopter instead of
+		// orbiting. This lambda is the ONLY thing that moves the aircraft during Area_Guard
+		// (the upstream function body is skipped wholesale by the hook above, 0x41A9DA is
+		// just the epilogue), so "fly back to the hover point" has to live here too: while
+		// still farther out than the natural turning radius, head straight for the centre;
+		// only once inside it brake to a stop. Without that, a hover + LoiterAutoTarget=yes
+		// aircraft would leave its hover point behind at the kill site after one sortie.
+		// IsLocked is only raised once parked (it makes the facing update at 0x4CF190 skip
+		// outright and kills the parked jitter), the flight back has to keep it clear or the
+		// nose stops turning and the aircraft strafes sideways.
+		if (AdvancedMissions::LoiterHover(pThis->Type))
+		{
+			auto const pExt = AircraftExt::Fetch(pThis);
+
+			// 悬停 = 把悬停点当成一个**固定目的地**：一段回程只下一次 Move_To，
+			// 之后完全交给飞控（它在到位后自己减速停住）。
+			//
+			// ★ 两条用实机实测换来的红线，都不能碰：
+			//   1) **绝不每帧重下 Move_To**：Move_To 每次调用都执行
+			//      `mov BYTE PTR [loco+0x30],1`（0x4CCEAA）置 HasMoveOrder，
+			//      而 Is_Moving()（0x4CCA90）读的正是它 —— 每帧重下 = 飞机永远
+			//      "到不了位"，只能绕着悬停点打转。绕圈模式靠的恰是这条特性
+			//      （每帧送一个转动的偏移点），所以两种模式不能共用写法。
+			//   2) **绝不调 Stop_Moving 来"刹车"**：它不是刹车，而是把目的地改写成
+			//      "飞机当前所在格"（0x4CCFD0 → SetDestination，实现 0x41AA80）。
+			//      飞机一接近悬停点就被改写目的地 → 往旁边格子飞 → 离圆心重新超过
+			//      阈值 → 再被拉回圆心 → 来回拉锯。用户实测观察到的
+			//      "接近目标格时指令突然跳到附近另一个格子"就是它。
+			if (distance > turningRadius)
+			{
+				// 0 = 首次进入 / 刚离开 AreaGuard（出击归来）；2 = 曾被推离悬停点。
+				if (pExt->Loiter_HoverState != 1)
+				{
+					pThis->Locomotor->Move_To(coords);
+					pExt->Loiter_HoverState = 1;
+				}
+			}
+			else
+			{
+				// 已到悬停点：只下过那一次 Move_To，之后什么都不做，
+				// 让飞控持续朝悬停点自我修正。
+				pExt->Loiter_HoverState = 2;
+			}
+
+			// ★★ 绝不能在悬停时置 `IsLocked = true`（第三版踩过，日志实证）：
+			//    `IsLocked` 会让 0x4CF190 的朝向更新**整段跳过** —— 机头被冻住，
+			//    飞机无法再朝悬停点修正，只能沿冻结的机头方向直着飞出去；
+			//    一飞远 `dist` 变大、降速倍率 `dist/1024` 随之变大 → 速度反而上升，
+			//    正反馈一路冲到 ~900 leptons；随后远分支放开锁定 → 转回来 → 靠近又冻住
+			//    → 再冲出去。实测 dist 在 0↔990 之间来回冲，就是这条。
+			//    （用户观察的"上下动没事、左右动滑出去"= 机头冻结在哪个方向就往哪逃。）
+			//    悬停靠的是"降速让转弯半径趋零"，机头必须保持可转向。
+			pThis->IsLocked = false;
+
+			return;
+		}
+
 		// Random hovering direction
-		const double ratio = (((pThis->LastFireBulletFrame + pThis->UniqueID) & 1) ? turningRadius : -turningRadius) / distance;
+		const double ratio = (((pThis->LastFireBulletFrame + pThis->UniqueID) & 1) ? radius : -radius) / distance;
 
 		// Fly sideways towards the target, and extend the distance to ensure no deceleration
 		const CoordStruct destination
@@ -863,16 +1085,36 @@ DEFINE_HOOK(0x41A96C, AircraftClass_Mission_AreaGuard, 0x6)
 		};
 
 		pThis->Locomotor->Move_To(destination);
+
+		// AdvancedAircraftMissions: keep the LOCK threshold on the turning radius, not on
+		// the configured loiter radius. AircraftClass::IsLocked is what the fly locomotor's
+		// facing update checks (and Phobos' hook at 0x4CF190 skips that update entirely while
+		// locked), so locking all the way out to the orbit radius freezes the nose and the
+		// model stops banking into the turn. With the turning radius it is byte-equivalent to
+		// the upstream expression for every type that has not opted in (GetLoiterRadius() == 0
+		// => max() == turningRadius), and for opted-in types the configured radius still drives
+		// the sideways offset above.
 		pThis->IsLocked = distance < turningRadius;
 	};
 
 	if (const auto pArchive = pThis->ArchiveTarget)
 	{
-		if (pThis->Ammo)
+		// AdvancedAircraftMissions: an infinite-ammo aircraft (type Ammo<=0) counts as armed
+		// while it is loitering, otherwise the loiter would end on the first frame.
+		// Scoped to our own loiter so the upstream guard behaviour is untouched.
+		const bool hasAmmo = pThis->Ammo
+			|| (AircraftExt::Fetch(pThis)->Loiter_Active && AdvancedMissions::HasAmmo(pThis));
+
+		if (hasAmmo)
 		{
 			auto coords = pArchive->GetCoords();
 
-			if (!pThis->TargetingTimer.HasTimeLeft() && pThis->TargetAndEstimateDamage(coords, ThreatType::Area))
+			// AdvancedAircraftMissions: LoiterAutoTarget=no suppresses the area search for our
+			// loiter only - an explicit Ctrl+Alt area guard keeps its vanilla behaviour.
+			const bool canSearch = !AircraftExt::Fetch(pThis)->Loiter_Active
+				|| AdvancedMissions::LoiterAutoTarget(pThis->Type);
+
+			if (canSearch && !pThis->TargetingTimer.HasTimeLeft() && pThis->TargetAndEstimateDamage(coords, ThreatType::Area))
 			{
 				// Without an airport, there is no need to record the previous location
 				if (pThis->MissionStatus)
@@ -920,6 +1162,21 @@ static int __fastcall AircraftClass_Mission_Sleep(AircraftClass* pThis)
 {
 	if (!pThis->Destination || pThis->Destination == pThis->DockNowHeadingTo)
 		return 450; // Vanilla MissionClass_Mission_Sleep value
+
+	// AdvancedAircraftMissions: 悬停机型的"待机"语义就是继续悬着。
+	// 这里是"飞机一进入待机就被上游送回机场"的咽喉点：只要盘旋条件还在，
+	// 就用原盘旋圆心重开盘旋，而不是 EnterIdleMode 回家。
+	// （防御性兜底：实机复验期间没有触发过，留作同一类"引擎把悬停中的飞机
+	//   送去待机"的保护；判据全部来自 INI + 同步的仿真状态，各机一致。）
+	if (AdvancedMissions::Enabled(pThis->Type)
+		&& pThis->ArchiveTarget
+		&& AdvancedMissions::HasAmmo(pThis)
+		&& AdvancedMissions::GetLoiterRadius(pThis->Type) > 0
+		&& AdvancedMissions::LoiterHover(pThis->Type)
+		&& AdvancedMissions::TryBeginLoiter(pThis, pThis->ArchiveTarget))
+	{
+		return 1;
+	}
 
 	pThis->EnterIdleMode(false, true);
 	return 1;
@@ -984,6 +1241,35 @@ DEFINE_HOOK(0x418CD1, AircraftClass_Mission_Attack_ContinueFlyToDestination, 0x6
 	{
 		if (!AircraftTypeExt::Fetch(pThis->Type)->ExtendedAircraftMissions.Get(RulesExt::Global()->ExtendedAircraftMissions) || pThis->Airstrike || pThis->IsALoaner)
 			return Continue;
+
+		// AdvancedAircraftMissions: target destroyed while ammo remains -> loiter over the
+		// target's last known position (recorded every frame while a target existed).
+		// Already loitering -> go back to the original loiter centre instead of re-centring,
+		// otherwise one kill would drag the aircraft further away every time.
+		if (!pThis->Team && AdvancedMissions::Enabled(pThis->Type))
+		{
+			auto const pExt = AircraftExt::Fetch(pThis);
+
+			if (pExt->Loiter_Active && pThis->ArchiveTarget)
+			{
+				if (AdvancedMissions::TryBeginLoiter(pThis, pThis->ArchiveTarget))
+				{
+					R->EAX(1);
+					return Return;
+				}
+			}
+			else if (pExt->Loiter_HasKillSpot)
+			{
+				if (auto const pKillCell = MapClass::Instance.TryGetCellAt(pExt->Loiter_KillSpot))
+				{
+					if (AdvancedMissions::TryBeginLoiter(pThis, pKillCell))
+					{
+						R->EAX(1);
+						return Return;
+					}
+				}
+			}
+		}
 
 		if (pThis->MegaMissionIsAttackMove() && pThis->MegaDestination)
 		{
@@ -1320,6 +1606,138 @@ DEFINE_HOOK(0x4143A8, AircraftClass_UnLimbo_CargoPlane, 0x6)
 		pThis->IsALoaner = pTypeExt->IsALoaner.Get();
 		return SkipGameCode;
 	}
+
+	return 0;
+}
+
+#pragma endregion
+
+#pragma region MissileHoming
+
+// Missile.Homing: 引擎的 Kamikaze 管理器会周期性地按节点 Cell 给每颗在飞导弹
+// 重新定向(约每 2 帧一次)。普通刷新 FootClass::Destination 会被它覆盖, 因此
+// 直接钩在原版读取该节点 Cell 的指令之前(0x54E51D 处 EAX=KamikazeControl*),
+// 把它刷成目标单位当前所在格 —— 与原版重定向同节奏, 导弹就会持续追踪目标。
+DEFINE_HOOK(0x54E51D, KamikazeContainer_Update_MissileHomingCell, 0x5)
+{
+	GET(Kamikaze::KamikazeControl* const, pNode, EAX);
+
+	auto const pMissile = pNode->Item;
+	if (!pMissile)
+		return 0;
+
+	auto const pTypeExt = AircraftTypeExt::Fetch(pMissile->Type);
+	if (!pTypeExt->Missile_Homing || !pMissile->Type->MissileSpawn)
+		return 0;
+
+	auto const pExt = AircraftExt::TryFetch(pMissile);
+	if (!pExt)
+		return 0;
+
+	// 兜底激活: 若发射钩子未跑到, 且 Kamikaze 节点的 Cell 本身就是目标单位
+	if (!pExt->Homing_Active)
+	{
+		if (auto const pTargetTechno = abstract_cast<TechnoClass*>(pNode->Cell))
+			AircraftExt::StartMissileHoming(pMissile, pTargetTechno);
+	}
+
+	if (!pExt->Homing_Active)
+		return 0;
+
+	auto const pTarget = pExt->Homing_Target;
+	if (!pTarget || !AircraftExt::IsTrackedTargetValid(pTarget) || !pTarget->IsAlive || pTarget->InLimbo
+		|| pTarget->WhatAmI() == AbstractType::Building
+		|| pTarget->CloakState == CloakState::Cloaked)
+	{
+		// 失锁: 节点 Cell 保持最后位置, 引擎会让导弹飞过去落地引爆
+		pExt->Homing_Active = false;
+		pExt->Homing_Target = nullptr;
+		return 0;
+	}
+
+	auto const aimCrd = pTarget->GetCenterCoords();
+
+	if (auto const pCell = MapClass::Instance.TryGetCellAt(aimCrd))
+	{
+		pNode->Cell = pCell;
+		pExt->Homing_LastAim = aimCrd;
+	}
+
+	return 0;
+}
+
+// Missile.Homing: 引擎本 tick 用节点 Cell 处理完导弹后, 再把 FootClass 目的地
+// 拉回目标当前格 —— 与引擎重定向同节奏双保险 (覆盖"飞行导航只认目的地"的情形)。
+DEFINE_HOOK(0x54E56D, KamikazeContainer_Update_MissileHomingAfter, 0x6)
+{
+	GET(AircraftClass* const, pMissile, ESI);
+
+	if (!pMissile)
+		return 0;
+
+	auto const pTypeExt = AircraftTypeExt::Fetch(pMissile->Type);
+	if (!pTypeExt->Missile_Homing || !pMissile->Type->MissileSpawn)
+		return 0;
+
+	auto const pExt = AircraftExt::TryFetch(pMissile);
+	if (!pExt || !pExt->Homing_Active)
+		return 0;
+
+	auto const pTarget = pExt->Homing_Target;
+	if (!pTarget || !AircraftExt::IsTrackedTargetValid(pTarget) || !pTarget->IsAlive || pTarget->InLimbo
+		|| pTarget->WhatAmI() == AbstractType::Building
+		|| pTarget->CloakState == CloakState::Cloaked)
+		return 0;
+
+	if (auto const pCell = MapClass::Instance.TryGetCellAt(pTarget->GetCenterCoords()))
+		pMissile->SetDestination(pCell, true);
+
+	return 0;
+}
+
+// Missile.Homing: 原版导弹一旦进入"末端俯冲(Step5)"就再也拉不起来, 目标跑远时
+// 会直插当时位置落地 —— 这是"只追一小段就插地"的根源。参照 Kratos 同址处理
+// (钩 0x662CAC, 命中即跳回 0x662A32 巡航逻辑), 制导中的导弹只要离目标还远,
+// 就跳过俯冲提交, 留在巡航段继续追。
+DEFINE_HOOK(0x662CAC, RocketLocomotionClass_Process_SkipTerminalDive_Homing, 0x6)
+{
+	enum { ReEnterCruise = 0x662A32 };
+
+	// 该地址的 ESI 指向火箭飞行器内部对象, 被驱动的 Aircraft 位于 [ESI+8]。
+	// 此处不做类型化成员访问(该处对象布局与 YRpp 模型在此不一致), 直接按原始
+	// 偏移读取并用 abstract_cast 校验 —— 与 Kratos 同址处理一致。
+	GET(DWORD, pContext, ESI);
+	if (!pContext)
+		return 0;
+
+	auto const pLinkedRaw = *reinterpret_cast<AbstractClass* const*>(reinterpret_cast<const char*>(pContext) + 8);
+	auto const pMissile = abstract_cast<AircraftClass*>(pLinkedRaw);
+	if (!pMissile)
+		return 0;
+
+	auto const pTypeExt = AircraftTypeExt::Fetch(pMissile->Type);
+	if (!pTypeExt->Missile_Homing || !pMissile->Type->MissileSpawn)
+		return 0;
+
+	auto const pExt = AircraftExt::TryFetch(pMissile);
+	if (!pExt || !pExt->Homing_Active)
+		return 0;
+
+	auto const pTarget = pExt->Homing_Target;
+	if (!pTarget || !AircraftExt::IsTrackedTargetValid(pTarget) || !pTarget->IsAlive || pTarget->InLimbo
+		|| pTarget->WhatAmI() == AbstractType::Building
+		|| pTarget->CloakState == CloakState::Cloaked)
+		return 0;
+
+	// 目标还远(水平距离大于阈值, 默认 2 格): 中止俯冲, 回巡航段继续追
+	auto const misCrd = pMissile->GetCoords();
+	auto const aimCrd = pTarget->GetCenterCoords();
+	const double dx = static_cast<double>(misCrd.X) - aimCrd.X;
+	const double dy = static_cast<double>(misCrd.Y) - aimCrd.Y;
+	const double distXY = std::sqrt(dx * dx + dy * dy);
+
+	if (distXY > pTypeExt->Homing_CruiseSkipRange.Get(512))
+		return ReEnterCruise;
 
 	return 0;
 }

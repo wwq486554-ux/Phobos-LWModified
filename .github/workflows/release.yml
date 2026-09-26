@@ -46,6 +46,14 @@ jobs:
         build-type: ${{ steps.info.outputs.build-type }}
 
     - name: Extract Release Notes
+      id: changelog
+      # Fork change: upstream fails the whole run when the tag does not match a
+      # documented version in docs/Whats-New.md, and because this step runs before
+      # "Upload Release Assets" that also means the DLL never gets attached.
+      # This fork tags releases with a "-pbsnewN" suffix, which upstream's version
+      # regex does not accept, so the step is made non-fatal and a fallback body is
+      # written by the next step instead.
+      continue-on-error: true
       shell: pwsh
       run: |
         .\scripts\extract_changelog.ps1 `
@@ -53,6 +61,19 @@ jobs:
           -WhatsNewPath docs\Whats-New.md `
           -OutputPath RELEASE_NOTES.md `
           -LinkBase "https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs"
+
+    - name: Fallback Release Notes
+      if: steps.changelog.outcome != 'success'
+      shell: pwsh
+      run: |
+        $tag = "${{ github.ref_name }}"
+        $body = @"
+        Unofficial **Phobos-LWModified** build for ``$tag``.
+
+        This is not official Phobos. See the repository README for the `unofficial fork`
+        notice, what upstream PRs are integrated here and what this fork adds.
+        "@
+        Set-Content -Path RELEASE_NOTES.md -Value $body -Encoding utf8
 
     - name: Append Changelog to the Release Notes
       shell: pwsh

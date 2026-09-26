@@ -73,10 +73,16 @@ Identical to official Phobos: put `Phobos.dll` into your YR game directory and l
 ## Building / 构建
 
 - **Windows (upstream way):** `scripts\build_release.bat` with Visual Studio 2022 (MSVC v143).
-- **Linux (fork addition):** `scripts/linux/build_linux.sh Release` runs the real MSVC toolchain under
-  Wine — see `scripts/linux/README.md`.
-- **CI:** publishing a GitHub Release triggers `.github/workflows/release.yml`, which builds the DLL
-  and attaches it to the release.
+- **Linux (fork addition):** `scripts/linux/build_linux.sh Release --build-type RELEASE` runs the real
+  MSVC toolchain under Wine — see `scripts/linux/README.md`.
+- **CI:** publishing a GitHub Release triggers `.github/workflows/release.yml`, which builds with
+  `BuildType=RELEASE` and attaches the DLL to the release.
+
+> **Build type decides the version string.** Only a `RELEASE` build reports
+> `v0.5.0.0-alpha1-pbsnew1`. A plain local build — `--build-type` omitted, or the upstream
+> `build_release.bat`, which passes no `BuildType` — reports
+> `v0.5.0.0 @ <commit> @ refs/heads/main` instead, which does **not** identify this fork.
+> Ship release-family builds.
 
 ## Known issues / 已知问题
 

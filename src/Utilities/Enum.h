@@ -206,6 +206,14 @@ enum class SelfHealGainType
 	Units = 2
 };
 
+// How SweepFire hands the current aim point of a sweep to the projectile it creates.
+enum class SweepFireAimMode
+{
+	Auto = 0,  // Pick a representation automatically
+	Cell = 1,  // Aim at the cell under the current aim point
+	Coord = 2  // Override the target coordinates with the current aim point
+};
+
 enum class InterceptedStatus : unsigned char
 {
 	None = 0x0,
@@ -453,3 +461,24 @@ enum class AdditionalAbility : unsigned char
 };
 
 constexpr size_t AdditionalAbilityCount = static_cast<size_t>(AdditionalAbility::Count);
+
+// LocomotorWeapon - the movement behaviour applied by a LocomotorWeapon warhead.
+enum class LocoWeaponMode
+{
+	Auto = 0,   // derive from the warhead's Locomotor= GUID
+	Mover,      // let the requested vanilla locomotor drive the victim
+	Meteor,     // custom meteor-style drop (used for the DropPod GUID)
+	Air,        // custom lift / drag / land
+	Warp,       // custom delayed teleport
+	Hold,       // do not move at all, just keep the lock
+	Jumpjet     // reserved - handled by vanilla, never reaches the custom class
+};
+
+// LocomotorWeapon.EndAction - what happens to the victim once the effect ends.
+enum class LocoWeaponEndAction
+{
+	Restore = 0,
+	Land,
+	Warp,
+	Drop
+};

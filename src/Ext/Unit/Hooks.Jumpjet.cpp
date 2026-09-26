@@ -13,13 +13,22 @@
 DEFINE_HOOK(0x736F78, UnitClass_UpdateFiring_FireErrorIsFACING, 0x6)
 {
 	GET(UnitClass* const, pThis, ESI);
+	GET(const int, weaponIndex, EDI);
 
 	const auto pType = pThis->Type;
 	CoordStruct& source = pThis->Location;
 	const CoordStruct target = pThis->Target->GetCoords(); // Target checked so it's not null here
 	const DirStruct tgtDir { Math::atan2(source.Y - target.Y, target.X - source.X) };
 
-	if (pType->Turret && !pType->HasTurret) // 0x736F92
+	// BodyWeapon: this weapon ignores the turret entirely and is aimed by the hull.
+	// The hull is turned here; the turret is glued to the hull by
+	// UnitClass_UpdateRotation_BodyWeapon every frame, so SecondaryFacing must not be touched
+	// here - otherwise the turret starts rotating towards the target, which raises
+	// FireError::ROTATING and stalls the hull rotation altogether.
+	// Vehicles without a turret keep the original code path untouched.
+	const bool bodyWeapon = pType->Turret && UnitTypeExt::Fetch(pType)->IsBodyWeapon(weaponIndex);
+
+	if (pType->Turret && !pType->HasTurret && !bodyWeapon) // 0x736F92
 	{
 		pThis->SecondaryFacing.SetDesired(tgtDir);
 	}
@@ -33,17 +42,46 @@ DEFINE_HOOK(0x736F78, UnitClass_UpdateFiring_FireErrorIsFACING, 0x6)
 				jjLoco->LocomotionFacing.SetDesired(tgtDir);
 				if (jjLoco->State == JumpjetLocomotionClass::State::Grounded)
 					pThis->PrimaryFacing.SetDesired(tgtDir);
-				pThis->SecondaryFacing.SetDesired(tgtDir);
+				if (!bodyWeapon)
+					pThis->SecondaryFacing.SetDesired(tgtDir);
 			}
 		}
 		else if (!pThis->Destination && !pThis->Locomotor->Is_Moving())
 		{
 			pThis->PrimaryFacing.SetDesired(tgtDir);
-			pThis->SecondaryFacing.SetDesired(tgtDir);
+			if (!bodyWeapon)
+				pThis->SecondaryFacing.SetDesired(tgtDir);
 		}
 	}
 
 	return 0x736FB1;
+}
+
+// BodyWeapon: the turret is not allowed to track the target at all, it stays locked to the hull
+// (i.e. pointing where the hull points) so that the facing check (UnitClass::GetFireError),
+// the fire coordinate (TechnoClass::GetFLH -> GetRealFacing) and the voxel drawing all follow
+// the hull. SetCurrent is used instead of SetDesired on purpose: a slowly rotating turret sets
+// unknown_bool_6AF, which makes UnitClass::GetFireError return FireError::ROTATING and keeps
+// UnitClass::UpdateFiring from ever reaching the FACING branch that turns the hull.
+// This hook sits exactly on the engine's own WeaponStruct::TurretLocked test, so the vanilla
+// `WeaponXTurretLocked` art tag keeps its original behaviour (it is re-evaluated below verbatim).
+DEFINE_HOOK(0x736A02, UnitClass_UpdateRotation_BodyWeapon, 0x5)
+{
+	enum { TurretLockedBranch = 0x736A09, TrackTargetBranch = 0x736A22, SkipTracking = 0x736A8E };
+
+	GET(UnitClass* const, pThis, ESI);
+	GET(WeaponStruct* const, pTurretWeapon, EDI);
+
+	// SelectWeapon is what UnitClass::UpdateFiring uses to pick the slot it is about to fire,
+	// so both halves of the feature always agree on the same weapon index.
+	if (!pThis->Type->TurretSpins && pThis->Target
+		&& UnitTypeExt::Fetch(pThis->Type)->IsBodyWeapon(pThis->SelectWeapon(pThis->Target)))
+	{
+		pThis->SecondaryFacing.SetCurrent(pThis->PrimaryFacing.Current());
+		return SkipTracking;
+	}
+
+	return pTurretWeapon->TurretLocked ? TurretLockedBranch : TrackTargetBranch;
 }
 
 // For compatibility with previous builds

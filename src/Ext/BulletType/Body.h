@@ -38,6 +38,57 @@ public:
 
 	TrajectoryTypePointer TrajectoryType;
 
+	Valueable<int> LifeDuration;
+	Valueable<int> NoTargetLifeTime;
+	Valueable<int> CreateCapacity;
+	Valueable<int> RetargetInterval;
+	Valueable<double> RetargetRadius;
+	Valueable<AffectedHouse> RetargetHouses;
+	Valueable<bool> Synchronize;
+	Nullable<bool> PeacefulVanish;
+	Valueable<bool> ApplyRangeModifiers;
+	Valueable<bool> UseDisperseCoord;
+
+	Valueable<bool> PassDetonate;
+	Valueable<bool> PassDetonateLocal;
+	Valueable<WarheadTypeClass*> PassDetonateWarhead;
+	Nullable<int> PassDetonateDamage;
+	Valueable<int> PassDetonateDelay;
+	Valueable<int> PassDetonateInitialDelay;
+	Valueable<int> ProximityImpact;
+	Valueable<WarheadTypeClass*> ProximityWarhead;
+	Nullable<int> ProximityDamage;
+	Valueable<Leptons> ProximityRadius;
+	Valueable<bool> ProximityDirect;
+	Valueable<bool> ProximityMedial;
+	Valueable<bool> ProximityAllies;
+	Valueable<bool> ProximityFlight;
+	Valueable<bool> ProximitySphere;
+	Valueable<bool> ThroughVehicles;
+	Valueable<bool> ThroughBuilding;
+	Valueable<double> DamageEdgeAttenuation;
+	Valueable<double> DamageCountAttenuation;
+
+	ValueableVector<WeaponTypeClass*> DisperseWeapons;
+	ValueableVector<int> DisperseBursts;
+	ValueableVector<int> DisperseCounts;
+	ValueableVector<int> DisperseDelays;
+	Valueable<int> DisperseCycle;
+	Valueable<int> DisperseInitialDelay;
+	Valueable<Leptons> DisperseEffectiveRange;
+	Valueable<bool> DisperseSeparate;
+	Valueable<bool> DisperseRetarget;
+	Valueable<bool> DisperseLocation;
+	Valueable<bool> DisperseTendency;
+	Valueable<bool> DisperseHolistic;
+	Valueable<bool> DisperseMarginal;
+	Valueable<bool> DisperseDoRepeat;
+	Valueable<bool> DisperseSuicide;
+	Nullable<bool> DisperseFromFirer;
+	Valueable<bool> DisperseFaceCheck;
+	Valueable<bool> DisperseForceFire;
+	Valueable<CoordStruct> DisperseCoord;
+
 	Nullable<bool> Shrapnel_AffectsGround;
 	Nullable<bool> Shrapnel_AffectsBuildings;
 	Nullable<bool> Shrapnel_UseWeaponTargeting;
@@ -57,6 +108,32 @@ public:
 	Nullable<bool> ReturnWeapon_ApplyFirepowerMult;
 
 	Valueable<bool> SubjectToGround;
+	Valueable<bool> SubjectToSolid;
+
+	Valueable<bool> BallisticScatter_IncreaseByRange;
+	Nullable<Leptons> BallisticScatter_MinRange;
+	Nullable<Leptons> BallisticScatter_MaxRange;
+	Nullable<Leptons> BallisticScatter_Min_InMinRange;
+	Nullable<Leptons> BallisticScatter_Min_InMaxRange;
+	Nullable<Leptons> BallisticScatter_Max_InMinRange;
+	Nullable<Leptons> BallisticScatter_Max_InMaxRange;
+	Valueable<double> BallisticScatter_Chance;
+
+	// Universal scatter shaping. Applied to every scatter path: classic FlakScatter
+	// (Unlimbo), visible Fire_At scatter, Phobos trajectories and ClusterScatter.
+	// - Sigma: radius distribution exponent. 1.0 = uniform in radius (legacy behaviour),
+	//   0.5 = uniform in area, >1 = biased towards the centre (each +1 halves the median radius).
+	// - Aspect: area-conserving ellipse ratio (long axis / short axis). 1.0 = circle.
+	// - Divergence: reshapes how the scatter grows with distance. See BulletExt::
+	//   ScatterDistanceFactor. 1.0 = the engine's linear ramp, smaller = scatter stays
+	//   tight up close and climbs to Max near maximum range, larger = the ramp flattens
+	//   out towards a distance-independent radius. Only a lower bound of 0.05 is enforced.
+	//   When this projectile does not write the key, the global [General] Divergence is
+	//   used instead - resolve it through GetScatterDivergence(), never read the field
+	//   directly, or the global default is silently skipped.
+	Valueable<double> Scatter_Sigma;
+	Valueable<double> Scatter_Aspect;
+	Nullable<double> Scatter_Divergence;
 
 	Valueable<bool> Splits;
 	Valueable<double> AirburstSpread;
@@ -103,6 +180,54 @@ public:
 		, Vertical_AircraftFix {}
 		, VerticalInitialFacing {}
 		, TrajectoryType { }
+		, LifeDuration { 0 }
+		, NoTargetLifeTime { -1 }
+		, CreateCapacity { -1 }
+		, RetargetInterval { 1 }
+		, RetargetRadius { 0 }
+		, RetargetHouses { AffectedHouse::Enemies }
+		, Synchronize { false }
+		, PeacefulVanish {}
+		, ApplyRangeModifiers { false }
+		, UseDisperseCoord { false }
+		, PassDetonate { false }
+		, PassDetonateLocal { false }
+		, PassDetonateWarhead {}
+		, PassDetonateDamage {}
+		, PassDetonateDelay { 1 }
+		, PassDetonateInitialDelay { 0 }
+		, ProximityImpact { 0 }
+		, ProximityWarhead {}
+		, ProximityDamage {}
+		, ProximityRadius { Leptons(179) }
+		, ProximityDirect { false }
+		, ProximityMedial { false }
+		, ProximityAllies { false }
+		, ProximityFlight { false }
+		, ProximitySphere { true }
+		, ThroughVehicles { true }
+		, ThroughBuilding { true }
+		, DamageEdgeAttenuation { 1.0 }
+		, DamageCountAttenuation { 1.0 }
+		, DisperseWeapons {}
+		, DisperseBursts {}
+		, DisperseCounts {}
+		, DisperseDelays {}
+		, DisperseCycle { 0 }
+		, DisperseInitialDelay { 0 }
+		, DisperseEffectiveRange { Leptons(0) }
+		, DisperseSeparate { false }
+		, DisperseRetarget { false }
+		, DisperseLocation { false }
+		, DisperseTendency { false }
+		, DisperseHolistic { false }
+		, DisperseMarginal { false }
+		, DisperseDoRepeat { false }
+		, DisperseSuicide { true }
+		, DisperseFromFirer {}
+		, DisperseFaceCheck { false }
+		, DisperseForceFire { true }
+		, DisperseCoord { CoordStruct::Empty }
 		, Shrapnel_AffectsGround {}
 		, Shrapnel_AffectsBuildings {}
 		, Shrapnel_UseWeaponTargeting {}
@@ -119,8 +244,23 @@ public:
 		, AAOnly { false }
 		, Arcing_AllowElevationInaccuracy {}
 		, ReturnWeapon {}
+		, SubjectToSolid { false }
 		, ReturnWeapon_ApplyFirepowerMult {}
 		, SubjectToGround { false }
+		, BallisticScatter_IncreaseByRange { false }
+		, BallisticScatter_MinRange {}
+		, BallisticScatter_MaxRange {}
+		, BallisticScatter_Min_InMinRange {}
+		, BallisticScatter_Min_InMaxRange {}
+		, BallisticScatter_Max_InMinRange {}
+		, BallisticScatter_Max_InMaxRange {}
+		, BallisticScatter_Chance { 1.0 }
+		, Scatter_Sigma { 1.0 }
+		, Scatter_Aspect { 1.0 }
+		// Unset on purpose: the fallback is the global [General] Divergence (default 0.5),
+		// resolved by GetScatterDivergence() so that changing the global takes effect without
+		// touching any projectile.
+		, Scatter_Divergence {}
 		, Splits { false }
 		, AirburstSpread { 1.5 }
 		, RetargetAccuracy { 0.0 }
@@ -165,6 +305,12 @@ private:
 	void TrajectoryValidation() const;
 
 public:
+	// Divergence coefficient to use for this projectile: its own 'Divergence' key when it was
+	// written, otherwise the global [General] Divergence. Deliberately resolved when used
+	// rather than at INI load, so the global value is always the final one and a projectile
+	// only has to write the key when it wants to differ from the global.
+	double GetScatterDivergence() const;
+
 	class ExtContainer final : public Container<BulletTypeExt>
 	{
 	public:

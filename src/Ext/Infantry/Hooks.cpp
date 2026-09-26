@@ -1,6 +1,7 @@
 #include <Ext/BuildingType/Body.h>
 #include <Ext/Infantry/Body.h>
 
+#include <BuildingClass.h>
 #include <InputManagerClass.h>
 
 DEFINE_HOOK(0x51B2BD, InfantryClass_UpdateTarget_IsControlledByHuman, 0x6)
@@ -96,6 +97,37 @@ DEFINE_HOOK(0x51E462, InfantryClass_WhatAction_ObjectClass_SkipBomb, 0x6)
 	}
 
 	return SkipBomb;
+}
+
+// An engineer carrying a real weapon may attack enemy units like any other armed
+// infantry. Vanilla hardcodes
+//   if (Type->Engineer && action == Action::Attack) return Action::NoMove;
+// at 0x51E6B4, so an armed engineer can never get an attack cursor on a unit.
+// Only engineers ever reach this point (0x51E6C2 diverts everyone else) and
+// 0x51E6D8 and beyond contain no engineer special-casing, so from there an armed
+// engineer behaves exactly like a plain armed infantry.
+//
+// Force-fired buildings are deliberately NOT handled here: deeper in the general
+// path the engine rewrites any non-allied, capturable building back to
+// Action::Capture (0x51EE91 -> 0x51EEEF), which no jump at this level can dodge.
+// That case is rewritten at the outermost layer instead, see
+// InfantryClass__WhatAction_Wrapper in Ext/Techno/Hooks.TargetEvaluation.cpp.
+DEFINE_HOOK(0x51E6C4, InfantryClass_WhatAction_EngineerAttack, 0x5)
+{
+	enum { SkipEngineerAttackClamp = 0x51E6D8 };
+
+	GET(InfantryClass*, pThis, EDI);
+	GET(ObjectClass*, pTarget, ESI);
+	GET(Action, baseAction, EBP);
+
+	if (baseAction == Action::Attack
+		&& pThis->Owner->IsControlledByCurrentPlayer()
+		&& InfantryExt::HasAttackWeapon(pThis, pTarget))
+	{
+		return SkipEngineerAttackClamp;
+	}
+
+	return 0;
 }
 
 DEFINE_HOOK(0x51E4FB, InfantryClass_WhatAction_ObjectClass_EnigneerEnterBuilding, 0x6)

@@ -1,5 +1,8 @@
 #include "Body.h"
+#include <Ext/Infantry/Body.h>
 #include <Interop/TechnoExt.h>
+
+#include <InputManagerClass.h>
 
 // Cursor & target acquisition stuff not directly tied to other features can go here.
 
@@ -367,12 +370,44 @@ DEFINE_FUNCTION_JUMP(VTABLE, 0x7F5CE4, UnitClass__WhatAction_Wrapper)
 static Action __fastcall InfantryClass__WhatAction_Wrapper(InfantryClass* pThis, void* _, ObjectClass* pObj, bool ignoreForce)
 {
 	AresScheme::Prefix(pThis, pObj, -1, pThis->Type->Engineer);
-	auto const result = pThis->InfantryClass::MouseOverObject(pObj, ignoreForce);
+	auto result = pThis->InfantryClass::MouseOverObject(pObj, ignoreForce);
 	AresScheme::Suffix();
+
+	// Fork: an armed engineer that force-fires must attack, exactly like any other
+	// armed infantry. Without force fire nothing changes, so clicking a building
+	// still means capture / repair / enter as vanilla.
+	//
+	// This cannot be done deeper inside MouseOverObject: with force fire held the
+	// upstream 0x51E4FB hook already lets the engineer branch pass, but the general
+	// path then rewrites any non-allied, capturable building back to
+	// Action::Capture (0x51EE91 -> 0x51EEEF) no matter which entry point is used.
+	// The wrapper is the outermost layer (the real vtable slot 0x7EB0CC), so the
+	// decision is simply rewritten here.
+	if (pThis->Type->Engineer
+		&& pObj
+		&& abstract_cast<BuildingClass*>(pObj)
+		&& !ignoreForce
+		&& result != Action::Attack
+		&& result != Action::DisarmBomb
+		&& InputManagerClass::Instance->IsForceFireKeyPressed()
+		&& InfantryExt::HasAttackWeapon(pThis, pObj))
+	{
+		result = Action::Attack;
+	}
+
 	return result;
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7EB0CC, InfantryClass__WhatAction_Wrapper)
 
+// NOTE: the cell side (MouseOverCell) is deliberately NOT patched.
+//
+// Slots 0x7F5CDC / 0x7F5CE0 / 0x7EB0C4 all resolve into the shared
+// implementation at 0x4DED70, whose exact parameter list could not be
+// established from the headers. Patching them made the game crash
+// deterministically during startup - an access violation while the mouse was
+// captured, with Ebp/Ecx == MouseClass::Instance (0x87F7E8). Until that
+// signature is confirmed only the object side is hooked.
+//
 #pragma endregion
 
 #pragma region ThreatEvaluation

@@ -15,6 +15,7 @@ static constexpr unsigned int TargetChanges_Size = 1024;
 static constexpr unsigned int DestinationChanges_Size = 1024;
 static constexpr unsigned int MissionOverrides_Size = 256;
 static constexpr unsigned int AnimCreations_Size = 512;
+static constexpr unsigned int LocomotorWeaponEvents_Size = 256;
 
 // Intention: Data structure that stores sync event records.
 // Stores fixed amount of items determined by size template arg. Any further additions
@@ -143,6 +144,21 @@ struct AnimCreationSyncLogEvent : SyncLogEvent
 	{ }
 };
 
+// LocomotorWeapon: applying / releasing the custom magnetron locomotor.
+struct LocomotorWeaponSyncLogEvent : SyncLogEvent
+{
+	AbstractType Type;
+	DWORD ID;
+	int Mode;
+	bool Begin;
+
+	LocomotorWeaponSyncLogEvent() : SyncLogEvent() { }
+
+	LocomotorWeaponSyncLogEvent(const AbstractType& Type, const DWORD& ID, int Mode, bool Begin, unsigned int Caller, unsigned int Frame)
+		: Type(Type), ID(ID), Mode(Mode), Begin(Begin), SyncLogEvent(Caller, Frame)
+	{ }
+};
+
 class SyncLogger
 {
 private:
@@ -152,6 +168,7 @@ private:
 	static SyncLogEventBuffer<TargetChangeSyncLogEvent, DestinationChanges_Size> DestinationChanges;
 	static SyncLogEventBuffer<MissionOverrideSyncLogEvent, MissionOverrides_Size> MissionOverrides;
 	static SyncLogEventBuffer<AnimCreationSyncLogEvent, AnimCreations_Size> AnimCreations;
+	static SyncLogEventBuffer<LocomotorWeaponSyncLogEvent, LocomotorWeaponEvents_Size> LocomotorWeaponEvents;
 
 	static void WriteRNGCalls(FILE* const pLogFile, int frameDigits);
 	static void WriteFacingChanges(FILE* const pLogFile, int frameDigits);
@@ -159,6 +176,7 @@ private:
 	static void WriteDestinationChanges(FILE* const pLogFile, int frameDigits);
 	static void WriteMissionOverrides(FILE* const pLogFile, int frameDigits);
 	static void WriteAnimCreations(FILE* const pLogFile, int frameDigits);
+	static void WriteLocomotorWeaponEvents(FILE* const pLogFile, int frameDigits);
 	static void WriteTeams(FILE* const pLogFile);
 public:
 	static int AnimCreations_HighestX;
@@ -175,6 +193,8 @@ public:
 	static void AddDestinationChangeSyncLogEvent(AbstractClass* pObject, AbstractClass* pTarget, unsigned int callerAddress);
 	static void AddMissionOverrideSyncLogEvent(AbstractClass* pObject, int mission, unsigned int callerAddress);
 	static void AddAnimCreationSyncLogEvent(const CoordStruct& coords, unsigned int callerAddress);
+	// LocomotorWeapon: begin == true when the locomotor is applied, false on release.
+	static void AddLocomotorWeaponSyncLogEvent(AbstractClass* pObject, int mode, bool begin, unsigned int callerAddress);
 	static void WriteSyncLog(const char* logFilename);
 	static void SetTeamLoggingPadding(TeamClass* pTeam);
 };

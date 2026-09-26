@@ -3,6 +3,8 @@
 
 #include <Ext/House/Body.h>
 #include <Ext/Rules/Body.h>
+#include <Ext/Techno/SpecialAction.h>
+#include <Ext/Aircraft/AdvancedMissions.h>
 
 #include <Helpers/Macro.h>
 #include <ShapeButtonClass.h>
@@ -21,6 +23,18 @@ void EventExt::RespondEvent()
 		break;
 	case EventTypeExt::TogglePlayerAutoRepair:
 		this->RespondToTogglePlayerAutoRepair();
+		break;
+	case EventTypeExt::SpecialActionWeapon:
+		this->RespondSpecialActionWeapon();
+		break;
+	case EventTypeExt::SpecialActionSuperWeapon:
+		this->RespondSpecialActionSuperWeapon();
+		break;
+	case EventTypeExt::SpecialActionAttachEffect:
+		this->RespondSpecialActionAttachEffect();
+		break;
+	case EventTypeExt::SpecialActionReturn:
+		this->RespondSpecialActionReturn();
 		break;
 	default:
 		break;
@@ -45,6 +59,14 @@ size_t EventExt::GetDataSize(EventTypeExt type)
 		return sizeof(EventExt::ApproachObject);
 	case EventTypeExt::TogglePlayerAutoRepair:
 		return sizeof(EventExt::TogglePlayerAutoRepair);
+	case EventTypeExt::SpecialActionWeapon:
+		return sizeof(EventExt::SpecialActionWeapon);
+	case EventTypeExt::SpecialActionSuperWeapon:
+		return sizeof(EventExt::SpecialActionSuperWeapon);
+	case EventTypeExt::SpecialActionAttachEffect:
+		return sizeof(EventExt::SpecialActionAttachEffect);
+	case EventTypeExt::SpecialActionReturn:
+		return sizeof(EventExt::SpecialActionReturn);
 	default:
 		break;
 	}
@@ -129,6 +151,73 @@ void EventExt::RespondToTogglePlayerAutoRepair()
 		else
 			SidebarClass::ToggleRepairButton.TurnOff();
 	}
+}
+
+void EventExt::RespondSpecialActionWeapon()
+{
+	const auto pTechno = this->SpecialActionWeapon.Whom.As_Techno();
+
+	if (!pTechno || !pTechno->Owner || static_cast<char>(pTechno->Owner->ArrayIndex) != this->HouseIndex)
+		return;
+
+	// This runs on every machine, including the one that raised the event. Only
+	// per-unit state may be written here: queueing another event from inside an
+	// event handler would make it fire once per machine.
+	SpecialAction::ApplyArmedWeapon(pTechno, this->SpecialActionWeapon.WeaponSlot);
+}
+
+void EventExt::RespondSpecialActionSuperWeapon()
+{
+	const auto pTechno = this->SpecialActionSuperWeapon.Whom.As_Techno();
+
+	if (!pTechno || !pTechno->Owner || static_cast<char>(pTechno->Owner->ArrayIndex) != this->HouseIndex)
+		return;
+
+	// As above: this runs on every machine and may only touch the super weapon's
+	// own bookkeeping. In particular it must not call SpecialAction::Execute - that
+	// would re-enqueue the event once per machine.
+	SpecialAction::FireAttachedSuperWeapon(pTechno, this->SpecialActionSuperWeapon.SuperIndex,
+		this->SpecialActionSuperWeapon.Cell);
+}
+
+void EventExt::RespondSpecialActionAttachEffect()
+{
+	const auto pTechno = this->SpecialActionAttachEffect.Whom.As_Techno();
+
+	if (!pTechno || !pTechno->Owner || static_cast<char>(pTechno->Owner->ArrayIndex) != this->HouseIndex)
+		return;
+
+	// As above: this runs on every machine, including the one that pressed the key.
+	// It applies the effects and starts the cooldown, and must not call
+	// SpecialAction::Execute - that would re-enqueue the event once per machine.
+	SpecialAction::ApplyAttachEffect(pTechno);
+}
+
+void EventExt::RespondSpecialActionReturn()
+{
+	const auto pTechno = this->SpecialActionReturn.Whom.As_Techno();
+
+	if (!pTechno || !pTechno->Owner || static_cast<char>(pTechno->Owner->ArrayIndex) != this->HouseIndex)
+		return;
+
+	// As above: this runs on every machine, including the one that pressed the key
+	// or clicked the airfield, and may only touch this unit's own state. It must
+	// not call SpecialAction::Execute - that would re-enqueue the event once per
+	// machine. The cooldown is charged here so that both triggers agree on the
+	// frame it started.
+	auto const pAircraft = abstract_cast<AircraftClass*, true>(pTechno);
+
+	if (!pAircraft)
+		return;
+
+	if (this->SpecialActionReturn.Cancel)
+	{
+		AdvancedMissions::CancelReturnBoost(pAircraft);
+		return;
+	}
+
+	if (AdvancedMissions::StartReturnToBase(pAircraft))
+		SpecialAction::StartReturnCooldown(pTechno);
 }
 
 // hooks

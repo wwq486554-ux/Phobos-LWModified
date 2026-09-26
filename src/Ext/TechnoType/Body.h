@@ -13,6 +13,7 @@
 #include <New/Type/Affiliated/DroppodTypeClass.h>
 #include <New/Type/Affiliated/TiberiumEaterTypeClass.h>
 #include <New/Type/Affiliated/CreateUnitTypeClass.h>
+#include <New/Type/SpecialActionType.h>
 
 class Matrix3D;
 class ParticleSystemTypeClass;
@@ -238,6 +239,20 @@ public:
 	Nullable<SelectBoxTypeClass*> SelectBox;
 	Valueable<bool> HideSelectBox;
 
+	// Per-type overrides for the SpecialAction cooldown strip. The global keys
+	// (Pips.SpecialAction.* in [AudioVisual]) supply the defaults; Nullable is used
+	// rather than a copy of the default so that changing the global key is not
+	// silently overridden by a stale per-type value.
+	//
+	// The offset is the other way round on purpose: it is an additional nudge added
+	// to whichever per-shape global offset applies, not a replacement, so a type can
+	// be moved without having to restate the shape defaults. Same shape as
+	// AmmoPipOffset / SpawnsPipOffset.
+	Valueable<Point2D> SpecialActionPipOffset;
+	Nullable<int> SpecialActionPipSegments;
+	Nullable<int> SpecialActionPipFrame;
+	Nullable<int> SpecialActionPipEmptyFrame;
+
 	Valueable<int> AmmoPipFrame;
 	Valueable<int> EmptyAmmoPipFrame;
 	Valueable<int> AmmoPipWrapStartFrame;
@@ -440,6 +455,13 @@ public:
 
 	Nullable<bool> Unsellable; // Ares 3.0
 
+	// --- SpecialAction ---
+	// Per-unit-type special ability triggered by the global SpecialAction hotkey.
+	// EliteSpecialAction overrides SpecialAction while the unit is elite; an unset
+	// elite variant always falls back to the regular one (ROF behaves the same way).
+	SpecialActionData SpecialAction {};
+	SpecialActionData EliteSpecialAction {};
+
 	TechnoTypeExt(TechnoTypeClass* OwnerObject) : ObjectTypeExt(OwnerObject)
 		, HealthBar_Hide { false }
 		, HealthBar_HidePips { false }
@@ -636,6 +658,10 @@ public:
 		, SelectBox {}
 		, HideSelectBox { false }
 
+		, SpecialActionPipOffset { { 0, 0 } }
+		, SpecialActionPipSegments {}
+		, SpecialActionPipFrame {}
+		, SpecialActionPipEmptyFrame {}
 		, AmmoPipFrame { 13 }
 		, EmptyAmmoPipFrame { -1 }
 		, AmmoPipWrapStartFrame { 14 }

@@ -2,6 +2,7 @@
 #include <TunnelLocomotionClass.h>
 
 #include <Ext/UnitType/Body.h>
+#include <Ext/Techno/Body.h>
 
 namespace UnitUnloadTemp
 {
@@ -49,6 +50,35 @@ DEFINE_HOOK(0x73D63B, UnitClass_Mi_Unload_Subterranean, 0x6)
 	}
 
 	R->EAX(pType);
+
+	// A SpecialAction "Unload" request has to stay a passenger release. The deploy
+	// command and a passenger unload are the *same* mission (Mission::Unload), which
+	// is why the unit type's deploy keys cannot tell them apart: with
+	// Deploy.SkipPassengerUnload=true the engine would otherwise turn the ability
+	// into a second deploy key on exactly the units that need it most. The ability
+	// marks its own request, and this marker outranks both type level keys.
+	//
+	// The decision is remade on every tick of the mission (which is where this hook
+	// sits), so the marker has to be honoured here rather than once when the mission
+	// is queued - the deploy tail would be reached the moment the last passenger
+	// steps out.
+	if (auto const pTechnoExt = TechnoExt::TryFetch(pThis))
+	{
+		if (pTechnoExt->SpecialActionUnloading)
+		{
+			// The passenger state machine finishes in state 4, which queues Guard;
+			// only then is the mission really over and the marker safe to drop.
+			if (pThis->MissionStatus >= 4)
+			{
+				pTechnoExt->SpecialActionUnloading = false;
+
+				Debug::Log("[SpecialAction] unit %d: passenger phase finished (state %d), "
+					"unload marker released\n", pThis->Fetch_ID(), pThis->MissionStatus);
+			}
+
+			return Continue;
+		}
+	}
 
 	if (pTypeExt->Deploy_SkipPassengerUnload)
 		return SkipPassengers;

@@ -3,6 +3,109 @@
 #include <Ext/Anim/Body.h>
 #include <Ext/SWType/Body.h>
 #include <Ext/House/Body.h>
+#include <Ext/Techno/SpecialAction.h>
+
+void TechnoExt::DrawSpecialActionPips(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds)
+{
+	if (!pThis || !pThis->Owner)
+		return;
+
+	// Only an ability that actually recharges has anything to show. A type without
+	// SpecialActionROF is always usable, so a pip would be permanent noise.
+	if (SpecialAction::GetEffectiveROF(pThis) < 0)
+		return;
+
+	// Same gate the building radius indicators use. A unit the local player controls
+	// always shows its own strip; anyone else's is opt-in, because an enemy's
+	// readiness is information the player has no other way of getting.
+	if (HouseClass::CurrentPlayer
+		&& !HouseClass::IsCurrentPlayerObserver()
+		&& !pThis->Owner->IsControlledByCurrentPlayer())
+	{
+		AffectedHouse const canSee = RulesExt::Global()->Pips_SpecialAction_VisibleTo.Get();
+
+		if (pThis->Owner->IsAlliedWith(HouseClass::CurrentPlayer)
+			? !(canSee & AffectedHouse::Allies)
+			: !(canSee & AffectedHouse::Enemies))
+		{
+			return;
+		}
+	}
+
+	auto const pGlobal = RulesExt::Global();
+	auto const pType = pThis->GetTechnoType();
+	auto const pTypeExt = TechnoTypeExt::Fetch(pType);
+	Point2D offset;
+	Point2D spacing;
+	auto const whatAmI = pThis->WhatAmI();
+
+	// One offset set per shape, exactly like the self-heal pip: the same screen
+	// position does not work for a flat infantry sprite and a tall building.
+	if (whatAmI == AbstractType::Building)
+	{
+		offset = pGlobal->Pips_SpecialAction_Buildings_Offset.Get();
+		spacing = pGlobal->Pips_Generic_Buildings_Size.Get();
+	}
+	else if (whatAmI == AbstractType::Infantry)
+	{
+		offset = pGlobal->Pips_SpecialAction_Infantry_Offset.Get();
+		spacing = pGlobal->Pips_Generic_Size.Get();
+	}
+	else
+	{
+		offset = pGlobal->Pips_SpecialAction_Units_Offset.Get();
+		spacing = pGlobal->Pips_Generic_Size.Get();
+	}
+
+	// The per-type offset is a nudge on top of the shape default, not a replacement,
+	// so a type can be moved without restating the shape offsets.
+	auto const pipOffset = pTypeExt->SpecialActionPipOffset.Get();
+	offset.X += pipOffset.X;
+	offset.Y += pipOffset.Y;
+
+	// Frames and segment count are plain overrides: unset falls back to the global
+	// key, which is why they are Nullable rather than a copy of the default.
+	const int frame = pTypeExt->SpecialActionPipFrame.Get(pGlobal->Pips_SpecialAction_Frame.Get());
+	const int emptyFrame = pTypeExt->SpecialActionPipEmptyFrame.Get(pGlobal->Pips_SpecialAction_EmptyFrame.Get());
+	const int globalSegments = pGlobal->Pips_SpecialAction_Segments.Get();
+	const int segments = pTypeExt->SpecialActionPipSegments.Get(globalSegments) > 1
+		? pTypeExt->SpecialActionPipSegments.Get(globalSegments) : 1;
+
+	// A modder can disable the strip by pointing both frames outside the SHP.
+	if (frame < 0 && emptyFrame < 0)
+		return;
+
+	// CDTimerClass::TimeLeft is the duration the cooldown was started with (the
+	// engine subtracts the elapsed frames when GetTimeLeft is called), so the
+	// fraction costs no extra state on the techno.
+	auto const& timer = TechnoExt::Fetch(pThis)->SpecialActionTimer;
+	int charged = segments;
+
+	if (timer.HasTimeLeft())
+	{
+		const int total = timer.TimeLeft;
+
+		if (total > 0)
+		{
+			const int elapsed = total - timer.GetTimeLeft();
+			charged = static_cast<int>(static_cast<long long>(elapsed) * segments / total);
+			charged = charged < 0 ? 0 : (charged > segments ? segments : charged);
+		}
+	}
+
+	auto const flags = BlitterFlags::bf_400 | BlitterFlags::Centered;
+	Point2D position = { pLocation->X + offset.X, pLocation->Y + offset.Y + pType->PixelSelectionBracketDelta };
+
+	for (int i = 0; i < segments; ++i)
+	{
+		DSurface::Temp->DrawSHP(FileSystem::PALETTE_PAL, FileSystem::PIPS_SHP,
+			i < charged ? frame : emptyFrame, &position, pBounds, flags,
+			0, 0, ZGradient::Ground, 1000, 0, 0, 0, 0, 0);
+
+		position.X += spacing.X;
+		position.Y += spacing.Y;
+	}
+}
 
 void TechnoExt::DrawSelfHealPips(TechnoClass* pThis, Point2D* pLocation, RectangleStruct* pBounds)
 {

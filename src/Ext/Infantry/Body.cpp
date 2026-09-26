@@ -2,6 +2,9 @@
 
 #include <Ext/InfantryType/Body.h>
 
+#include <WarheadTypeClass.h>
+#include <WeaponTypeClass.h>
+
 InfantryExt::ExtContainer InfantryExt::ExtMap;
 
 // Returns hardcoded prone/deployed FLH overrides for infantry, if set.
@@ -38,6 +41,30 @@ CoordStruct InfantryExt::GetSimpleFLH(InfantryClass* pThis, int weaponIndex, boo
 	}
 
 	return FLH;
+}
+
+// An engineer is only allowed to attack when it actually carries something to
+// shoot with: the weapon the engine would pick for this target must exist, have
+// a warhead and not be a bomb-disarm tool (DefuseKit-style weapons are for Ivan
+// bombs and keep their own cursor).
+bool InfantryExt::HasAttackWeapon(InfantryClass* pThis, ObjectClass* pTarget)
+{
+	if (!pThis || !pTarget)
+		return false;
+
+	const int index = pThis->SelectWeapon(pTarget);
+
+	if (index < 0)
+		return false;
+
+	const auto pWeapon = pThis->GetWeapon(index);
+
+	if (!pWeapon)
+		return false;
+
+	const auto pWeaponType = pWeapon->WeaponType;
+
+	return pWeaponType && pWeaponType->Warhead && !pWeaponType->Warhead->BombDisarm;
 }
 
 // =============================

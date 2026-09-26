@@ -2,6 +2,8 @@
 
 #include <cmath>
 
+#include <Utilities/Debug.h>
+
 #include <Ext/TechnoType/Body.h>
 #include <New/Type/RadTypeClass.h>
 #include <New/Type/ShieldTypeClass.h>
@@ -112,6 +114,12 @@ void RulesExt::ExtData::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 	this->VeinholeWarhead.Read<true>(exINI, GameStrings::CombatDamage, "VeinholeWarhead");
 	this->MissingCameo.Read(pINI, GameStrings::AudioVisual, "MissingCameo");
 
+	// Global fallbacks for the SpecialAction feedback keys. A type's own entry
+	// always wins; these only apply when the ability sets nothing of its own.
+	this->SpecialAction_Sound.Read(exINI, GameStrings::AudioVisual, "SpecialAction.Sound");
+	this->SpecialAction_NotReadySound.Read(exINI, GameStrings::AudioVisual, "SpecialAction.NotReadySound");
+	this->SpecialAction_NotReadyMessage.Read(pINI, GameStrings::AudioVisual, "SpecialAction.NotReadyMessage");
+
 	this->PlacementGrid_Translucency.Read(exINI, GameStrings::AudioVisual, "PlacementGrid.Translucency");
 	this->PlacementGrid_TranslucencyWithPreview.Read(exINI, GameStrings::AudioVisual, "PlacementGrid.TranslucencyWithPreview");
 	this->PlacementPreview.Read(exINI, GameStrings::AudioVisual, "PlacementPreview");
@@ -133,6 +141,13 @@ void RulesExt::ExtData::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 	this->Pips_SelfHeal_Infantry_Offset.Read(exINI, GameStrings::AudioVisual, "Pips.SelfHeal.Infantry.Offset");
 	this->Pips_SelfHeal_Units_Offset.Read(exINI, GameStrings::AudioVisual, "Pips.SelfHeal.Units.Offset");
 	this->Pips_SelfHeal_Buildings_Offset.Read(exINI, GameStrings::AudioVisual, "Pips.SelfHeal.Buildings.Offset");
+	this->Pips_SpecialAction_Frame.Read(exINI, GameStrings::AudioVisual, "Pips.SpecialAction.Frame");
+	this->Pips_SpecialAction_EmptyFrame.Read(exINI, GameStrings::AudioVisual, "Pips.SpecialAction.EmptyFrame");
+	this->Pips_SpecialAction_Segments.Read(exINI, GameStrings::AudioVisual, "Pips.SpecialAction.Segments");
+	this->Pips_SpecialAction_Infantry_Offset.Read(exINI, GameStrings::AudioVisual, "Pips.SpecialAction.Infantry.Offset");
+	this->Pips_SpecialAction_Units_Offset.Read(exINI, GameStrings::AudioVisual, "Pips.SpecialAction.Units.Offset");
+	this->Pips_SpecialAction_Buildings_Offset.Read(exINI, GameStrings::AudioVisual, "Pips.SpecialAction.Buildings.Offset");
+	this->Pips_SpecialAction_VisibleTo.Read(exINI, GameStrings::AudioVisual, "Pips.SpecialAction.VisibleTo");
 	this->Pips_Generic_Size.Read(exINI, GameStrings::AudioVisual, "Pips.Generic.Size");
 	this->Pips_Generic_Buildings_Size.Read(exINI, GameStrings::AudioVisual, "Pips.Generic.Buildings.Size");
 	this->Pips_Ammo_Size.Read(exINI, GameStrings::AudioVisual, "Pips.Ammo.Size");
@@ -164,6 +179,34 @@ void RulesExt::ExtData::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 
 	this->ExtendedAircraftMissions.Read(exINI, GameStrings::General, "ExtendedAircraftMissions");
 	this->ExtendedAircraftMissions_UnlandDamage.Read(exINI, GameStrings::General, "ExtendedAircraftMissions.UnlandDamage");
+
+	// AdvancedAircraftMissions 全局默认（类型段同名键优先）
+	this->AdvancedAircraftMissions_LoiterRadius.Read(exINI, GameStrings::General, "AdvancedAircraftMissions.LoiterRadius");
+	this->AdvancedAircraftMissions_LoiterAutoTarget.Read(exINI, GameStrings::General, "AdvancedAircraftMissions.LoiterAutoTarget");
+	this->AdvancedAircraftMissions_ReturnSpeedMultiplier.Read(exINI, GameStrings::General, "AdvancedAircraftMissions.ReturnSpeedMultiplier");
+	this->AdvancedAircraftMissions_HoverBrakeRange.Read(exINI, GameStrings::General, "AdvancedAircraftMissions.HoverBrakeRange");
+
+	// 字符串枚举键：deny（默认，不作为）/ loiter（回家待命盘旋）
+	if (exINI.ReadString(GameStrings::General, "AdvancedAircraftMissions.ReturnWithoutDock"))
+	{
+		if (_strcmpi(exINI.value(), "deny") == 0)
+			this->AdvancedAircraftMissions_ReturnWithoutDock = false;
+		else if (_strcmpi(exINI.value(), "loiter") == 0)
+			this->AdvancedAircraftMissions_ReturnWithoutDock = true;
+		else
+			Debug::INIParseFailed(GameStrings::General, "AdvancedAircraftMissions.ReturnWithoutDock", exINI.value(), "Expected deny or loiter");
+	}
+
+	// 字符串枚举键：circle（默认，绕圈）/ hover（像直升机一样定在原地）
+	if (exINI.ReadString(GameStrings::General, "AdvancedAircraftMissions.LoiterMode"))
+	{
+		if (_strcmpi(exINI.value(), "circle") == 0)
+			this->AdvancedAircraftMissions_LoiterMode = false;
+		else if (_strcmpi(exINI.value(), "hover") == 0)
+			this->AdvancedAircraftMissions_LoiterMode = true;
+		else
+			Debug::INIParseFailed(GameStrings::General, "AdvancedAircraftMissions.LoiterMode", exINI.value(), "Expected circle or hover");
+	}
 	this->AircraftSpawnFromEdge.Read(exINI, GameStrings::General, "AircraftSpawnFromEdge");
 	this->AircraftRetreatToEdge.Read(exINI, GameStrings::General, "AircraftRetreatToEdge");
 	this->AmphibiousEnter.Read(exINI, GameStrings::General, "AmphibiousEnter");
@@ -173,6 +216,10 @@ void RulesExt::ExtData::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 	this->NoQueueUpToUnload.Read(exINI, GameStrings::General, "NoQueueUpToUnload");
 	this->NoQueueUpToEnter_Buildings.Read(exINI, GameStrings::General, "NoQueueUpToEnter.Buildings");
 	this->NoQueueUpToUnload_Buildings.Read(exINI, GameStrings::General, "NoQueueUpToUnload.Buildings");
+
+	// Vanilla only recognises a Temporal warhead on a unit's first weapon slot; this
+	// lets it work from any slot instead. See the field's comment for the mechanism.
+	this->TemporalWeapon_AnySlot.Read(exINI, GameStrings::General, "TemporalWeapon.AnySlot");
 
 	this->JumpjetTilt.Read(exINI, GameStrings::AudioVisual, "JumpjetTilt");
 	this->JumpjetTilt_ForwardAccelFactor.Read(exINI, GameStrings::AudioVisual, "JumpjetTilt.ForwardAccelFactor");
@@ -438,6 +485,9 @@ void RulesExt::ExtData::LoadBeforeTypeData(RulesClass* pThis, CCINIClass* pINI)
 	this->Explodes_DuringBuildup.Read(exINI, GameStrings::General, "Explodes.DuringBuildup");
 
 	this->AircraftFiringForceScatter.Read(exINI, GameStrings::General, "AircraftFiringForceScatter");
+
+	// Global default for the per-projectile 'Divergence'; a projectile writing its own wins.
+	this->Scatter_Divergence.Read(exINI, GameStrings::General, "Divergence");
 
 	this->HoverDrownable.Read(exINI, GameStrings::General, "HoverDrownable");
 
@@ -713,8 +763,12 @@ void RulesExt::ExtData::Serialize(T& Stm)
 		.Process(this->JumpjetCrash)
 		.Process(this->JumpjetNoWobbles)
 		.Process(this->JumpjetRotateOnCrash)
+		.Process(this->TemporalWeapon_AnySlot)
 		.Process(this->VeinholeWarhead)
 		.Process(this->MissingCameo)
+		.Process(this->SpecialAction_Sound)
+		.Process(this->SpecialAction_NotReadySound)
+		.Process(this->SpecialAction_NotReadyMessage)
 		.Process(this->PlacementGrid_Translucency)
 		.Process(this->PlacementGrid_TranslucencyWithPreview)
 		.Process(this->PlacementPreview)
@@ -734,6 +788,13 @@ void RulesExt::ExtData::Serialize(T& Stm)
 		.Process(this->Pips_SelfHeal_Infantry_Offset)
 		.Process(this->Pips_SelfHeal_Units_Offset)
 		.Process(this->Pips_SelfHeal_Buildings_Offset)
+		.Process(this->Pips_SpecialAction_Frame)
+		.Process(this->Pips_SpecialAction_EmptyFrame)
+		.Process(this->Pips_SpecialAction_Segments)
+		.Process(this->Pips_SpecialAction_Infantry_Offset)
+		.Process(this->Pips_SpecialAction_Units_Offset)
+		.Process(this->Pips_SpecialAction_Buildings_Offset)
+		.Process(this->Pips_SpecialAction_VisibleTo)
 		.Process(this->Pips_Generic_Size)
 		.Process(this->Pips_Generic_Buildings_Size)
 		.Process(this->Pips_Ammo_Size)
@@ -748,6 +809,10 @@ void RulesExt::ExtData::Serialize(T& Stm)
 		.Process(this->HeightShadowScaling_MinScale)
 		.Process(this->ExtendedAircraftMissions)
 		.Process(this->ExtendedAircraftMissions_UnlandDamage)
+		.Process(this->AdvancedAircraftMissions_LoiterRadius)
+		.Process(this->AdvancedAircraftMissions_LoiterAutoTarget)
+		.Process(this->AdvancedAircraftMissions_ReturnSpeedMultiplier)
+		.Process(this->AdvancedAircraftMissions_ReturnWithoutDock)
 		.Process(this->AircraftSpawnFromEdge)
 		.Process(this->AircraftRetreatToEdge)
 		.Process(this->AmphibiousEnter)
@@ -972,6 +1037,7 @@ void RulesExt::ExtData::Serialize(T& Stm)
 		.Process(this->Explodes_KillPassengers)
 		.Process(this->Explodes_DuringBuildup)
 		.Process(this->AircraftFiringForceScatter)
+		.Process(this->Scatter_Divergence)
 		.Process(this->HoverDrownable)
 		.Process(this->Arcing_AllowElevationInaccuracy)
 		.Process(this->Terrain_IsPassable)
@@ -1087,6 +1153,9 @@ void RulesExt::ExtData::Serialize(T& Stm)
 		.Process(this->NoAlphaImageOnBuildup)
 		.Process(this->ReadyToNextMission_MovingCheck)
 		.Process(this->Warhead_PreventScatter)
+		// 新增字段一律追加在链尾（理由同 AircraftTypeExt::Serialize）
+		.Process(this->AdvancedAircraftMissions_LoiterMode)
+		.Process(this->AdvancedAircraftMissions_HoverBrakeRange)
     ;
 }
 

@@ -179,6 +179,24 @@ public:
 	Nullable<bool> JumpjetNoWobbles;
 	Nullable<int> JumpjetDeviation;
 
+	// LocomotorWeapon (custom magnetron locomotor, see LocomotorWeaponLocomotionClass)
+	Nullable<LocoWeaponMode> LocomotorWeapon_Mode;
+	Nullable<int> LocomotorWeapon_Speed;
+	Nullable<int> LocomotorWeapon_Height;
+	Nullable<int> LocomotorWeapon_ClimbRate;
+	Nullable<int> LocomotorWeapon_DescendRate;
+	Nullable<int> LocomotorWeapon_StopDistance;
+	Nullable<int> LocomotorWeapon_Duration;
+	Nullable<bool> LocomotorWeapon_EndOnArrival;
+	Nullable<LocoWeaponEndAction> LocomotorWeapon_EndAction;
+	Nullable<bool> LocomotorWeapon_ReleaseOnFirerStop;
+	Nullable<bool> LocomotorWeapon_FallingDamage;
+	Nullable<int> LocomotorWeapon_MeteorDamage;
+	NullableIdx<AnimTypeClass> LocomotorWeapon_Anim;
+	NullableIdx<AnimTypeClass> LocomotorWeapon_MeteorAnim;
+	ValueableVector<TechnoTypeClass*> LocomotorWeapon_AllowedTypes;
+	ValueableVector<TechnoTypeClass*> LocomotorWeapon_DisallowedTypes;
+
 	Valueable<bool> Nonprovocative;
 
 	Nullable<bool> MergeBuildingDamage;
@@ -454,6 +472,23 @@ public:
 		, JumpjetWobbles {}
 		, JumpjetNoWobbles {}
 		, JumpjetDeviation {}
+
+		, LocomotorWeapon_Mode {}
+		, LocomotorWeapon_Speed {}
+		, LocomotorWeapon_Height {}
+		, LocomotorWeapon_ClimbRate {}
+		, LocomotorWeapon_DescendRate {}
+		, LocomotorWeapon_StopDistance {}
+		, LocomotorWeapon_Duration {}
+		, LocomotorWeapon_EndOnArrival {}
+		, LocomotorWeapon_EndAction {}
+		, LocomotorWeapon_ReleaseOnFirerStop {}
+		, LocomotorWeapon_FallingDamage {}
+		, LocomotorWeapon_MeteorDamage {}
+		, LocomotorWeapon_Anim {}
+		, LocomotorWeapon_MeteorAnim {}
+		, LocomotorWeapon_AllowedTypes {}
+		, LocomotorWeapon_DisallowedTypes {}
 
 		, Nonprovocative { false }
 

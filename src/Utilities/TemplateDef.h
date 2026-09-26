@@ -1031,6 +1031,33 @@ namespace detail
 	}
 
 	template <>
+	inline bool read<SweepFireAimMode>(SweepFireAimMode& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			static const std::pair<const char*, SweepFireAimMode> Names[] =
+			{
+				{"auto", SweepFireAimMode::Auto},
+				{"cell", SweepFireAimMode::Cell},
+				{"coord", SweepFireAimMode::Coord},
+			};
+
+			for (auto const& [name, val] : Names)
+			{
+				if (_strcmpi(parser.value(), name) == 0)
+				{
+					value = val;
+					return true;
+				}
+			}
+
+			Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected a SweepFire aim mode (auto, cell, coord)");
+		}
+
+		return false;
+	}
+
+	template <>
 	inline bool read<SlaveChangeOwnerType>(SlaveChangeOwnerType& value, INI_EX& parser, const char* pSection, const char* pKey)
 	{
 		if (parser.ReadString(pSection, pKey))
@@ -1216,6 +1243,84 @@ namespace detail
 			else
 			{
 				Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected a stacking mode type");
+				return false;
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	template <>
+	inline bool read<LocoWeaponMode>(LocoWeaponMode& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			if (_strcmpi(parser.value(), "auto") == 0)
+			{
+				value = LocoWeaponMode::Auto;
+			}
+			else if (_strcmpi(parser.value(), "mover") == 0)
+			{
+				value = LocoWeaponMode::Mover;
+			}
+			else if (_strcmpi(parser.value(), "meteor") == 0)
+			{
+				value = LocoWeaponMode::Meteor;
+			}
+			else if (_strcmpi(parser.value(), "air") == 0)
+			{
+				value = LocoWeaponMode::Air;
+			}
+			else if (_strcmpi(parser.value(), "warp") == 0)
+			{
+				value = LocoWeaponMode::Warp;
+			}
+			else if (_strcmpi(parser.value(), "hold") == 0)
+			{
+				value = LocoWeaponMode::Hold;
+			}
+			else if (_strcmpi(parser.value(), "jumpjet") == 0)
+			{
+				value = LocoWeaponMode::Jumpjet;
+			}
+			else
+			{
+				Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected a locomotor weapon mode");
+				return false;
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	template <>
+	inline bool read<LocoWeaponEndAction>(LocoWeaponEndAction& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			if (_strcmpi(parser.value(), "restore") == 0)
+			{
+				value = LocoWeaponEndAction::Restore;
+			}
+			else if (_strcmpi(parser.value(), "land") == 0)
+			{
+				value = LocoWeaponEndAction::Land;
+			}
+			else if (_strcmpi(parser.value(), "warp") == 0)
+			{
+				value = LocoWeaponEndAction::Warp;
+			}
+			else if (_strcmpi(parser.value(), "drop") == 0)
+			{
+				value = LocoWeaponEndAction::Drop;
+			}
+			else
+			{
+				Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected a locomotor weapon end action");
 				return false;
 			}
 

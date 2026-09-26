@@ -130,7 +130,7 @@ DEFINE_HOOK(0x4688A9, BulletClass_Unlimbo_Obstacles, 0x6)
 
 	GET(BulletClass*, pThis, EBX);
 	GET(CoordStruct const* const, sourceCoords, EDI);
-	REF_STACK(CoordStruct const, targetCoords, STACK_OFFSET(0x54, -0x10));
+	REF_STACK(CoordStruct, targetCoords, STACK_OFFSET(0x54, -0x10));
 
 	// Jul 5, 2025 - Starkku: Borrowing this hook for a parabomb check instead of adding a new one.
 	if (pThis->HasParachute)
@@ -140,6 +140,20 @@ DEFINE_HOOK(0x4688A9, BulletClass_Unlimbo_Obstacles, 0x6)
 	}
 
 	auto const pType = pThis->Type;
+
+	// Universal scatter: turn the classic FlakScatter offset left here by the engine into
+	// an area-conserving ellipse. Only this (Inviso) path has produced an offset at this
+	// point; for everything else the two coordinates are identical and the call is a no-op.
+	if (pType->FlakScatter && pType->Inviso)
+	{
+		const auto pTypeExt = BulletTypeExt::Fetch(pType);
+
+		if (pTypeExt->Scatter_Aspect != 1.0)
+		{
+			const CoordStruct base = pThis->TargetCoords;
+			BulletExt::ApplyScatterAspect(targetCoords, base, base - *sourceCoords, pTypeExt->Scatter_Aspect);
+		}
+	}
 
 	if (pType->Inviso)
 	{

@@ -87,10 +87,15 @@ CoordStruct TechnoExt::GetFLHAbsoluteCoords(TechnoClass* pThis, const CoordStruc
 	return location;
 }
 
-CoordStruct TechnoExt::GetBurstFLH(TechnoClass* pThis, int weaponIndex, bool& FLHFound)
+CoordStruct TechnoExt::GetBurstFLH(TechnoClass* pThis, int weaponIndex, bool& FLHFound, int burstIndex)
 {
 	FLHFound = false;
 	CoordStruct FLH = CoordStruct::Empty;
+
+	// SweepFire needs the muzzle of the Burst shot a sweep belongs to, which is
+	// not necessarily the one the techno is on right now.
+	if (burstIndex < 0)
+		burstIndex = pThis->CurrentBurstIndex;
 
 	auto const pExt = TechnoExt::Fetch(pThis)->TypeExtData;
 
@@ -124,10 +129,10 @@ CoordStruct TechnoExt::GetBurstFLH(TechnoClass* pThis, int weaponIndex, bool& FL
 		else if (pInf->Crawling && pInfTypeExt->CrouchedWeaponBurstFLHs.size() > 0)
 			pickedFLHs = pInfTypeExt->CrouchedWeaponBurstFLHs;
 	}
-	if ((int)pickedFLHs[weaponIndex].size() > pThis->CurrentBurstIndex)
+	if ((int)pickedFLHs[weaponIndex].size() > burstIndex)
 	{
 		FLHFound = true;
-		FLH = pickedFLHs[weaponIndex][pThis->CurrentBurstIndex];
+		FLH = pickedFLHs[weaponIndex][burstIndex];
 	}
 
 	return FLH;

@@ -55,9 +55,28 @@ public:
 		Valueable<bool> JumpjetNoWobbles;
 		Valueable<bool> JumpjetRotateOnCrash;
 
+		// A Temporal=yes warhead is normally only usable from a unit's first weapon
+		// slot: TechnoClass' initialization decides whether to create the techno's
+		// Temporal instance (TemporalImUsing) from weapon slot 0's warhead alone, and
+		// the detonation path then calls TemporalClass::Fire on that instance without
+		// checking it. A Temporal warhead delivered through any other slot - or
+		// through a weapon that never entered the type's slots at all, such as an
+		// AirburstWeapon - therefore crashed at 0x71AF4D, which gamemd.edb lists as a
+		// known vanilla crash. With this on, the instance is created on demand the
+		// first time such a warhead detonates, so the effect works from any slot.
+		// Turning it off restores the vanilla behaviour exactly, crash included.
+		Valueable<bool> TemporalWeapon_AnySlot;
+
 		Nullable<WarheadTypeClass*> VeinholeWarhead;
 
 		PhobosFixedString<32u> MissingCameo;
+
+		// Global defaults for the SpecialAction feedback, read from [AudioVisual].
+		// A type that sets the same key on its own entry wins; see
+		// SpecialAction.cpp for the exact resolution order.
+		ValueableIdx<VocClass> SpecialAction_Sound;
+		ValueableIdx<VocClass> SpecialAction_NotReadySound;
+		PhobosFixedString<0x40> SpecialAction_NotReadyMessage;
 
 		TranslucencyLevel PlacementGrid_Translucency;
 		Nullable<TranslucencyLevel> PlacementGrid_TranslucencyWithPreview;
@@ -80,6 +99,28 @@ public:
 		Valueable<Point2D> Pips_SelfHeal_Infantry_Offset;
 		Valueable<Point2D> Pips_SelfHeal_Units_Offset;
 		Valueable<Point2D> Pips_SelfHeal_Buildings_Offset;
+
+		// Dedicated pip strip for the SpecialAction cooldown.
+		//
+		// Deliberately NOT PipScale: that is a single per-type enum shared with ammo,
+		// tiberium, passengers, power and mind control, so a unit that already spends
+		// it on one of those cannot also publish its ability cooldown through it.
+		// This strip is drawn next to whatever PipScale produces, the same way the
+		// self-heal pip above is.
+		Valueable<int> Pips_SpecialAction_Frame;
+		Valueable<int> Pips_SpecialAction_EmptyFrame;
+		// How many pips the cooldown is split into. 1 means "a dot while ready, an
+		// empty slot while recharging"; raising it turns the strip into a gauge that
+		// also shows how far the recharge has come.
+		Valueable<int> Pips_SpecialAction_Segments;
+		Valueable<Point2D> Pips_SpecialAction_Infantry_Offset;
+		Valueable<Point2D> Pips_SpecialAction_Units_Offset;
+		Valueable<Point2D> Pips_SpecialAction_Buildings_Offset;
+		// Who is allowed to see the strip. An enemy's readiness is information the
+		// player has no other way of getting, so this gates it the same way
+		// RadialIndicatorVisibility gates the building radius indicators.
+		Valueable<AffectedHouse> Pips_SpecialAction_VisibleTo;
+
 		Valueable<Point2D> Pips_Generic_Size;
 		Valueable<Point2D> Pips_Generic_Buildings_Size;
 		Valueable<Point2D> Pips_Ammo_Size;
@@ -96,6 +137,13 @@ public:
 
 		Valueable<bool> ExtendedAircraftMissions;
 		Valueable<int> ExtendedAircraftMissions_UnlandDamage;
+		// AdvancedAircraftMissions 的全局默认（类型段同名键优先）
+		Valueable<int> AdvancedAircraftMissions_LoiterRadius; // 格
+		Valueable<bool> AdvancedAircraftMissions_LoiterMode; // circle=false | hover=true
+		Valueable<int> AdvancedAircraftMissions_HoverBrakeRange; // 格，hover 减速起始距离（默认 4）
+		Valueable<bool> AdvancedAircraftMissions_LoiterAutoTarget;
+		Valueable<double> AdvancedAircraftMissions_ReturnSpeedMultiplier;
+		Valueable<bool> AdvancedAircraftMissions_ReturnWithoutDock; // deny=false | loiter=true
 		Valueable<EdgeType> AircraftSpawnFromEdge;
 		Valueable<EdgeType> AircraftRetreatToEdge;
 		Valueable<bool> AmphibiousEnter;
@@ -378,6 +426,15 @@ public:
 
 		Valueable<bool> AircraftFiringForceScatter;
 
+		// Global default for the per-projectile 'Divergence' key: how fast the scatter radius
+		// grows with distance, as factor = (distance / weapon range) ^ (1 / Divergence).
+		// 1.0 reproduces the engine's original linear ramp; 0.5 (default) makes dispersion grow
+		// as distance^2, which is what real naval/artillery dispersion looks like.
+		// A projectile that writes its own Divergence uses that instead - see
+		// BulletTypeExt::GetScatterDivergence(). Only a lower bound of 0.05 is enforced; a value
+		// above 1.0 flattens the ramp and is accepted as written.
+		Valueable<double> Scatter_Divergence;
+
 		Valueable<bool> HoverDrownable;
 
 		Valueable<bool> Arcing_AllowElevationInaccuracy;
@@ -565,6 +622,7 @@ public:
 			, JumpjetCrash { 5.0 }
 			, JumpjetNoWobbles { false }
 			, JumpjetRotateOnCrash { true }
+			, TemporalWeapon_AnySlot { true }
 			, VeinholeWarhead {}
 			, MissingCameo { GameStrings::XXICON_SHP }
 
@@ -588,6 +646,13 @@ public:
 			, Pips_SelfHeal_Infantry_Offset { { 25, -35 } }
 			, Pips_SelfHeal_Units_Offset { { 33, -32 } }
 			, Pips_SelfHeal_Buildings_Offset { { 15, 10 } }
+			, Pips_SpecialAction_Frame { 1 }
+			, Pips_SpecialAction_EmptyFrame { 0 }
+			, Pips_SpecialAction_Segments { 1 }
+			, Pips_SpecialAction_Infantry_Offset { { 29, -35 } }
+			, Pips_SpecialAction_Units_Offset { { 37, -32 } }
+			, Pips_SpecialAction_Buildings_Offset { { 19, 10 } }
+			, Pips_SpecialAction_VisibleTo { AffectedHouse::Allies }
 			, Pips_Generic_Size { { 4, 0 } }
 			, Pips_Generic_Buildings_Size { { 4, 2 } }
 			, Pips_Ammo_Size { { 4, 0 } }
@@ -604,6 +669,12 @@ public:
 
 			, ExtendedAircraftMissions { false }
 			, ExtendedAircraftMissions_UnlandDamage { -1 }
+			, AdvancedAircraftMissions_LoiterRadius { 0 }
+			, AdvancedAircraftMissions_LoiterMode { false }
+			, AdvancedAircraftMissions_HoverBrakeRange { 4 }
+			, AdvancedAircraftMissions_LoiterAutoTarget { true }
+			, AdvancedAircraftMissions_ReturnSpeedMultiplier { 1.0 }
+			, AdvancedAircraftMissions_ReturnWithoutDock { false }
 			, AircraftSpawnFromEdge { EdgeType::Owner }
 			, AircraftRetreatToEdge { EdgeType::Owner }
 			, AmphibiousEnter { false }
@@ -853,6 +924,8 @@ public:
 			, Explodes_DuringBuildup { true }
 
 			, AircraftFiringForceScatter { true }
+
+			, Scatter_Divergence { 0.5 }
 
 			, HoverDrownable { true }
 

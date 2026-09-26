@@ -14,6 +14,9 @@ DEFINE_HOOK(0x4690D4, BulletClass_Logics_NewChecks, 0x6)
 	GET(WarheadTypeClass*, pWarhead, EAX);
 	GET_BASE(CoordStruct const* const, pCoords, 0x8);
 
+	if (BulletExt::Fetch(pBullet)->Status & TrajectoryStatus::Vanish)
+		return GoToExtras;
+
 	auto const pExt = WarheadTypeExt::Fetch(pWarhead);
 
 	if (auto const pTarget = abstract_cast<TechnoClass*>(pBullet->Target))
@@ -977,6 +980,48 @@ DEFINE_HOOK(0x4899DA, MapClass_DamageArea_DamageUnderGround, 0x7)
 	}
 
 	R->Stack8(STACK_OFFSET(0xE0, -0xC1), true);
+	return 0;
+}
+
+#pragma endregion
+
+#pragma region TemporalFromAnyWeaponSlot
+
+// Vanilla creates a techno's Temporal instance (TemporalImUsing, +0x274) in
+// TechnoClass::Init and only when weapon slot 0's warhead is Temporal. The detonation
+// path right below then loads that instance and calls TemporalClass::Fire on it with
+// no null check, so a Temporal warhead delivered through any other slot - or through
+// a weapon that never entered the type's slots at all, such as an AirburstWeapon's -
+// crashed at 0x71AF4D, an address gamemd.edb already documents as a known crash.
+//
+// Creating the instance here, on the first Temporal detonation, covers every path such
+// a warhead can take. TemporalClass' constructor registers itself in
+// TemporalClass::Array and draws no random numbers, and detonation is part of the
+// synchronized simulation, so every machine creates the instance on the same frame.
+//
+// The stolen instruction (mov ecx,[ecx+0x274]) re-runs with ECX still holding the
+// owner, so the call that follows it picks up the instance created here.
+DEFINE_HOOK(0x4694BB, BulletClass_Detonate_EnsureTemporal, 0x6)
+{
+	GET(BulletClass*, pThis, ESI);
+	GET(TechnoClass*, pOwner, ECX);
+
+	if (RulesExt::Global()->TemporalWeapon_AnySlot && pOwner)
+	{
+		// Remember which weapon produced this warhead. A Temporal warp's erase rate is
+		// worked out from that weapon, but the engine re-derives it from the owner's
+		// "current" weapon selection, which by the time the bullet lands no longer has
+		// anything to do with the shot that was fired. See TechnoExt::TemporalWarpWeapon.
+		if (pThis->WeaponType)
+		{
+			if (auto const pExt = TechnoExt::TryFetch(pOwner))
+				pExt->TemporalWarpWeapon = pThis->WeaponType;
+		}
+
+		if (!pOwner->TemporalImUsing)
+			pOwner->TemporalImUsing = GameCreate<TemporalClass>(pOwner);
+	}
+
 	return 0;
 }
 

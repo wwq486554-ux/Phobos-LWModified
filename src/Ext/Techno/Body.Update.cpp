@@ -22,6 +22,8 @@ void TechnoExt::OnEarlyUpdate()
 	this->UpdateRecountBurst();
 	this->UpdateRearmInEMPState();
 	this->UpdateLastTargetCrd();
+	// First line of defence is the container being empty, see UpdateSweepFire.
+	this->UpdateSweepFire();
 
 	if (this->CheckDeathConditions())
 		return;

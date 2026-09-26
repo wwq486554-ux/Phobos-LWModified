@@ -5,6 +5,8 @@
 #include <TunnelLocomotionClass.h>
 #include <FileFormats/HVA.h>
 
+#include <Ext/Aircraft/Body.h>
+#include <Ext/Aircraft/AdvancedMissions.h>
 #include <Ext/BuildingType/Body.h>
 #include <Ext/Unit/Body.h>
 #include <Ext/Anim/Body.h>
@@ -407,8 +409,9 @@ DEFINE_HOOK(0x415F5C, AircraftClass_FireAt_SpeedModifiers, 0xA)
 
 	if (const auto pLocomotor = locomotion_cast<FlyLocomotionClass*>(pThis->Locomotor))
 	{
+		// AdvancedAircraftMissions: 手动返航提速（窗口外恒为 1.0）
 		const double currentSpeed = pThis->Type->Speed * pLocomotor->CurrentSpeed *
-			TechnoExt::GetCurrentSpeedMultiplier(pThis);
+			TechnoExt::GetCurrentSpeedMultiplier(pThis) * AdvancedMissions::GetActiveSpeedMultiplier(pThis);
 		R->EAX(static_cast<int>(currentSpeed));
 	}
 
@@ -419,8 +422,9 @@ DEFINE_HOOK(0x4CDA78, FlyLocomotionClass_MovementAI_SpeedModifiers, 0x6)
 {
 	GET(FlyLocomotionClass*, pThis, ESI);
 
+	// AdvancedAircraftMissions: 手动返航提速（窗口外恒为 1.0）
 	const double currentSpeed = pThis->LinkedTo->GetTechnoType()->Speed * pThis->CurrentSpeed *
-		TechnoExt::GetCurrentSpeedMultiplier(pThis->LinkedTo);
+		TechnoExt::GetCurrentSpeedMultiplier(pThis->LinkedTo) * AdvancedMissions::GetActiveSpeedMultiplier(pThis->LinkedTo);
 
 	R->EAX(static_cast<int>(currentSpeed));
 
@@ -431,8 +435,9 @@ DEFINE_HOOK(0x4CE4BF, FlyLocomotionClass_4CE4B0_SpeedModifiers, 0x6)
 {
 	GET(FlyLocomotionClass*, pThis, ECX);
 
+	// AdvancedAircraftMissions: 手动返航提速（窗口外恒为 1.0）
 	const double currentSpeed = pThis->LinkedTo->GetTechnoType()->Speed * pThis->CurrentSpeed *
-		TechnoExt::GetCurrentSpeedMultiplier(pThis->LinkedTo);
+		TechnoExt::GetCurrentSpeedMultiplier(pThis->LinkedTo) * AdvancedMissions::GetActiveSpeedMultiplier(pThis->LinkedTo);
 
 	R->EAX(static_cast<int>(currentSpeed));
 
@@ -856,6 +861,18 @@ DEFINE_HOOK(0x6B75AC, SpawnManagerClass_AI_SetDestinationForMissiles, 0x5)
 	GET(TechnoClass*, pSpawnTechno, EDI);
 
 	auto const pTarget = pSpawnManager->Target;
+
+	// Missile.Homing: 发射瞬间锁定目标对象, 供飞行中持续跟踪
+	if (pSpawnTechno->WhatAmI() == AbstractType::Aircraft)
+	{
+		auto const pMissile = static_cast<AircraftClass*>(pSpawnTechno);
+
+		if (AircraftTypeExt::Fetch(pMissile->Type)->Missile_Homing)
+		{
+			if (auto const pTargetTechno = abstract_cast<TechnoClass*>(pTarget))
+				AircraftExt::StartMissileHoming(pMissile, pTargetTechno);
+		}
+	}
 
 	// Oct 27, 2025 - Starkku: Restore old behaviour for building destinations to eliminate inaccuracy issues.
 	// Aug 10, 2026 - Ollerus: Add a toggle since it'll affect the falling point and result in damage change.
@@ -1751,6 +1768,27 @@ DEFINE_FUNCTION_JUMP(VTABLE, 0x7E85FC, XSurfaceFake::_GetPixel);
 DEFINE_HOOK(0x7077FD, TechnoClass_PointerExpired_SpawnOwnerFix, 0x6)
 {
 	GET_STACK(const bool, removed, STACK_OFFSET(0x20, 0x8));
+
+	// Missile.Homing: 借同一处指针失效通知清除制导弹的锁定目标, 避免下一帧对
+	// 已释放对象解引用/虚调用 (此前表现为打地面单位后 EIP=0 的崩溃)。
+	// 此处 ESI=被通知的 Techno, EBP=pRemove (与上方 removed 来源同一函数帧)。
+	// 注: 不能只看 removed - 部分移除路径会以 removed=false 通知, 因此一律清。
+	//     另有一层 TechnoClass::Array 验活作为最终保险 (见 AircraftExt::IsTrackedTargetValid)。
+	GET(TechnoClass* const, pThis, ESI);
+	GET(AbstractClass* const, pRemove, EBP);
+
+	if (pThis && pRemove && pThis->WhatAmI() == AbstractType::Aircraft)
+	{
+		if (auto const pExt = AircraftExt::TryFetch(static_cast<AircraftClass*>(pThis)))
+		{
+			if (pExt->Homing_Target == pRemove)
+			{
+				pExt->Homing_Target = nullptr;
+				pExt->Homing_Active = false;
+			}
+		}
+	}
+
 	// Skip the reset for SpawnOwner if !removed.
 	return removed ? 0 : 0x707803;
 }

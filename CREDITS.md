@@ -945,7 +945,7 @@ This page lists all the individual contributions to the project by their author.
   - BodyWeapon: vehicle weapon slots that are aimed by turning the hull instead of the turret, by locking the turret to the hull
   - SpecialAction: unit-triggered active abilities with their own cooldown, optional per-unit super weapon, cooldown pips and an `AttachEffect` release action
   - AdvancedAircraftMissions: aircraft loiter over their destination instead of returning to base, with `circle`/`hover` modes, plus a manual return that speeds up the cruise home
-  - Fix `Temporal=yes` warheads being restricted to a unit's first weapon slot
-  - Fix scatter behaviour for laser, electric bolt and rad beam weapons
-  - Allow engineers to attack with their regular weapon
+  - Fix `Temporal=yes` warheads being restricted to a unit's first weapon slot, and make them erase the target at the damage of the weapon that actually fired them
+  - Universal scatter shaping: `Sigma` / `Aspect` / `Divergence` (plus the global `[General] Divergence`) give `BallisticScatter` the same meaning on every engine scatter path, so dispersion can be tuned to resemble real artillery spread
+  - Allow an armed engineer to attack when force-firing instead of the click being rewritten back to capture
   - `Trajectory.Engrave.FiringAnim` for a continuous firing animation on the Engrave trajectory

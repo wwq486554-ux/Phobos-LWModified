@@ -443,6 +443,10 @@ HideShakeEffects=false           ; boolean
   - Slots use the same 0-based numbering as `NoAmmoWeapon` and can be listed as `BodyWeapon=0,1`; `-1` means every slot.
   - Multi-turret vehicles are supported (all turrets share one facing, so they lock together). The vanilla `WeaponXTurretLocked` art tag is left untouched.
 - [Guided spawned missiles (`Missile.Homing`)](New-or-Enhanced-Logics.md#guided-spawned-missiles)
+- [Universal scatter shaping](New-or-Enhanced-Logics.md#universal-scatter-shaping) (by laowang)
+  - `BallisticScatter.Min/Max`, the radius distribution, the scatter ellipse and the distance ramp now mean the same thing on every scatter path, instead of depending on which engine routine happens to scatter the projectile: the `FlakScatter` + `Inviso` one in `BulletClass::Unlimbo`, both `TechnoClass::Fire_At` branches, Phobos trajectories, `ClusterScatter` and SweepFire.
+  - `Sigma` reshapes the radius distribution, `Aspect` turns the circular scatter into an area-conserving ellipse, and `Divergence` reshapes how the scatter grows with distance, so dispersion can be tuned to resemble real artillery spread.
+  - `[General] Divergence` sets the global default for `Divergence`; a projectile that does not set its own value uses it.
 - [Allow using waypoints, area guard and attack move with aircraft](Fixed-or-Improved-Logics.md#extended-aircraft-missions) (by CrimRecya)
 - [Advanced Aircraft Missions: loiter on arrival and boosted manual return](Fixed-or-Improved-Logics.md#advanced-aircraft-missions)
   - Aircraft loiter over their destination instead of returning to base, with a configurable radius, and can orbit the last known position of a destroyed target.

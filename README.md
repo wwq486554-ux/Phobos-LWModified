@@ -17,7 +17,7 @@
 > |---|---|
 > | **Based on / 基线** | Phobos `v0.5.0.0-alpha1` (`5a72f20641ec9a23f14fcc3959f647c08c736cd2`) |
 > | **Also integrates / 另整合** | upstream PR [#2060](https://github.com/Phobos-developers/Phobos/pull/2060) **"New trajectory system" — still an unmerged draft.** It reopens [#1582](https://github.com/Phobos-developers/Phobos/pull/1582) by [@CrimRecya](https://github.com/CrimRecya), reopened by [@TaranDahl](https://github.com/TaranDahl). |
-> | **Fork additions / 本分支追加** | `SpecialAction` · `SweepFire` · `WeaponXFire` · `LocomotorWeapon` · `BodyWeapon` · `AdvancedAircraftMissions` · Scatter fixes · `Temporal` any-slot fix · engineer attack · Engrave `FiringAnim` |
+> | **Fork additions / 本分支追加** | `SpecialAction` · `SweepFire` · `WeaponXFire` · `LocomotorWeapon` · `BodyWeapon` · `AdvancedAircraftMissions` · universal scatter shaping · `Temporal` any-slot fix · engineer attack · Engrave `FiringAnim` |
 > | **Version string / 版本串** | `v0.5.0.0-alpha1-pbsnew1` |
 > | **Modification date / 修改日期** | 2026-09-26 |
 >
@@ -51,15 +51,15 @@ by [@TaranDahl](https://github.com/TaranDahl)) — merged here by hand on top of
 
 | Feature | Summary |
 |---|---|
-| **SpecialAction** | A unit-triggered active ability (`SpecialAction=...`) with its own cooldown, 8 action kinds, an optional per-unit super weapon (`SpecialAction.SuperWeaponSource=unit`), cooldown pips and an `AttachEffect` release action. |
+| **SpecialAction** | A unit-triggered active ability (`SpecialAction=...`) with its own cooldown and 9 action kinds — `Deploy`, `DeploysInto`, `Convert`, `DeployFire`, `Unload`, `Weapon`, `SuperWeapon`, `AttachEffect`, `Return` — plus an optional per-unit super weapon (`SpecialAction.SuperWeaponSource=unit`) and cooldown pips. |
 | **SweepFire** | Weapon-level sweeping fire: one trigger fires a whole series of real, individually interceptable shots along a configurable line while ammo, `ROF` and `Burst` stay vanilla. |
-| **WeaponXFire** | `Weapon%dFire` in `artmd.ini` lets any weapon slot pick its own firing animation group, instead of only slot 0 getting `FireUp`. |
+| **WeaponXFire** | `Weapon%dFire` in `artmd.ini` lets each weapon slot (1-based index) choose between the `Primary` and `Secondary` firing animation groups, instead of the group being decided by whether the weapon happens to be the primary one. |
 | **LocomotorWeapon** | Reworks `IsLocomotor=yes`: every `Locomotor=` GUID releases its victim properly instead of leaving it permanently unable to move, `DropPod` no longer crashes, and the behaviour is configurable through `LocomotorWeapon.*` warhead keys. |
 | **BodyWeapon** | `BodyWeapon=0,1` lists vehicle weapon slots that may not use the turret — the turret is locked to the hull and the vehicle must turn its body to aim. |
 | **AdvancedAircraftMissions** | Aircraft loiter over their destination instead of flying home, with `circle`/`hover` modes, plus a manual return that speeds up the cruise back to base. |
-| **Scatter fixes** | Fixes scatter behaviour for laser, electric bolt and rad beam weapons. |
-| **Temporal fix** | `Temporal=yes` warheads are no longer restricted to a unit's first weapon slot (and no longer crash when fired from another slot). |
-| **Engineer attack** | Engineers can attack with their regular weapon. |
+| **Universal scatter shaping** | `Sigma`, `Aspect` and `Divergence` (plus a global `[General] Divergence`) give `BallisticScatter` the same meaning on **every** engine scatter path — `FlakScatter`/`Inviso`, both `Fire_At` branches, Phobos trajectories, `ClusterScatter` and SweepFire — so dispersion can be tuned to resemble real artillery spread. |
+| **Temporal fix** | `Temporal=yes` warheads are no longer restricted to a unit's first weapon slot: they no longer crash when delivered through another slot, and they erase their target at the damage of the weapon that actually fired them instead of the unit's current weapon selection. |
+| **Engineer attack** | An armed engineer that force-fires attacks like any other armed infantry, instead of the click being rewritten back to capture. It must actually carry something to shoot with, and without force fire nothing changes — clicking a building still means capture / repair / enter as vanilla. |
 | **Engrave `FiringAnim`** | `Trajectory.Engrave.FiringAnim` / `FiringAnimInterval` for a continuous firing animation. |
 
 ## Installation / 安装

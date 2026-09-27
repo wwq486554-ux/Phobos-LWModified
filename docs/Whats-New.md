@@ -716,12 +716,14 @@ HideShakeEffects=false           ; boolean
 - Allowed `(Pre)ProductionAnim` animations to use `Powered` & `PoweredLight/Effect/Special` keys (by Noble_Fish)
 - New Missile trajectory (by CrimRecya)
 - New Engrave trajectory (by CrimRecya)
+  - `Trajectory.Engrave.FiringAnim` and `Trajectory.Engrave.FiringAnimInterval` keep the weapon's firing animation replaying at the muzzle for the whole engrave process, instead of only once when the shot is fired (by laowang)
 - New Tracing trajectory (by CrimRecya)
 - New trajectory system with general functions (by CrimRecya)
 - Projectile life cycle logic and retargeting logic (by CrimRecya)
 - Projectile release warheads and weapons (by CrimRecya)
 
 #### Vanilla fixes:
+- [Armed engineers can attack](Fixed-or-Improved-Logics.md#armed-engineers-can-attack) (by laowang)
 - Fixed sidebar not updating queued unit numbers when adding or removing units when the production is on hold (by CrimRecya)
 - Prevent the units with locomotors that cause problems from entering the tank bunker (by TaranDahl)
 - Buildings with foundation bigger than 1x1 can now recycle spawned correctly (by TaranDahl)

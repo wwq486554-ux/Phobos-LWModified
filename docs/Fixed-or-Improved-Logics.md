@@ -1632,6 +1632,15 @@ ProneSpeed.NoCrawls=1.5       ; floating point value, multiplier
 ProneSpeed=                   ; floating point value, multiplier, by default, use the corresponding global value according to Crawls
 ```
 
+### Armed engineers can attack
+
+- Vanilla refuses to give an engineer an attack order: `TechnoClass::WhatAction` returns `Action::NoMove` for any `Engineer=yes` infantry as soon as the action would be `Attack`, so an engineer that carries a real weapon can never use it.
+- Now an engineer that actually carries something to shoot with is treated like any other armed infantry. To count as armed, the weapon the engine selects for that target must exist, must have a warhead, and must not be a `[Warhead] -> BombDisarm` defuse tool - those keep their own cursor and behaviour.
+- Only engineers owned by the current player are affected. The AI keeps the vanilla behaviour.
+- Against **units**, an armed engineer simply gets the normal attack action, and from there it behaves exactly like a plain armed infantry.
+- Against **buildings** the general path rewrites any non-allied, capturable building back to `Action::Capture`, so the attack is substituted only for a **force-fired** order. Without the force-fire key held, nothing changes: clicking a building still means capture, repair or enter exactly as in vanilla.
+- This is a behaviour change with no new INI keys.
+
 ## Overlays
 
 ### More than 255 OverlayTypes

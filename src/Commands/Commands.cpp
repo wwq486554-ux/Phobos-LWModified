@@ -16,6 +16,7 @@
 #include "DeselectObject.h"
 #include "DeselectObject5.h"
 #include "SpecialAction.h"
+#include "ViewZoomCommands.h"
 
 #include <CCINIClass.h>
 
@@ -35,6 +36,9 @@ DEFINE_HOOK(0x533066, CommandClassCallback_Register, 0x6)
 	MakeCommand<DeselectObjectCommandClass>();
 	MakeCommand<DeselectObject5CommandClass>();
 	MakeCommand<SpecialActionCommandClass>();
+	MakeCommand<ViewZoomInCommandClass>();
+	MakeCommand<ViewZoomOutCommandClass>();
+	MakeCommand<ViewZoomResetCommandClass>();
 
 	if (Phobos::Config::SelectCapturedCommand)
 		MakeCommand<SelectCapturedCommandClass>();
@@ -70,6 +74,13 @@ DEFINE_HOOK(0x533066, CommandClassCallback_Register, 0x6)
 	return 0;
 }
 
+// The tactical view zoom deliberately stays off the wheel. Every wheel notch also
+// runs the engine's own SidebarUp/SidebarDown command (0x777998 -> 0x533F50 ->
+// 0x537240 / 0x5371B0 -> SidebarClass::Scroll 0x6A6A00), and that routine has no
+// cursor-position check at all, so a wheel zoom would scroll the sidebar list at
+// the same time -- and every step also forces a full tactical redraw. The zoom
+// lives on the three bindable commands instead (View Zoom In / View Zoom Out /
+// Reset View Zoom); the middle button stays as a second reset.
 static void MouseWheelDownCommand()
 {
 	if (MessageColumnClass::Instance.IsHovering() && !ScenarioClass::Instance->UserInputLocked)

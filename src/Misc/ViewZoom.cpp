@@ -327,6 +327,50 @@ namespace
 	unsigned int DiagSidebarNativePresents = 0;
 	int DiagSidebarLoggedWidth = 0;
 
+	// Invalidation produced while the enlarged viewport is not installed. The
+	// engine hands the renderer native-viewport geometry there, so the fork has
+	// to correct it: 0x6D2790 rectangles have to move into the enlarged space,
+	// and 0x6DA7D0 has to enqueue cells the native cull would drop. These are
+	// the two numbers that tell whether the outer band is being serviced.
+	unsigned int DiagDirtySeen = 0;
+	unsigned int DiagDirtyCorrected = 0;
+	unsigned int DiagDirtySamples = 0;
+	// Rectangles registered *inside* the render window: those already describe
+	// the enlarged view, so they must not be moved. Their count and first
+	// samples tell whether the object/animation erase path is registering at
+	// all while zoomed out.
+	unsigned int DiagDirtyInWindow = 0;
+	unsigned int DiagDirtyInWindowSamples = 0;
+	unsigned int DiagCellSeen = 0;
+	unsigned int DiagCellCalls = 0;
+	unsigned int DiagCellWideOnly = 0;
+	unsigned int DiagCellEnqueued = 0;
+	unsigned int DiagCellCapped = 0;
+	unsigned int DiagCellSamples = 0;
+
+	// Cost of the banded fill: a restart walks the map's whole cell vector, and
+	// every pushed cell is drawn by all twelve per-cell passes.
+	unsigned int DiagBandRestarts = 0;
+	unsigned int DiagBandPushed = 0;
+
+	// Whole-viewport repaints forced by ViewZoom.FullRedrawEvery.
+	unsigned int DiagForcedRedraws = 0;
+	int FullRedrawCountdown = 0;
+	int DiagFullRedrawInterval = 0;
+
+	// Every dirty rectangle the engine registers, including the ones made while
+	// rendering natively. Comparing the native rate with the zoomed one is what
+	// tells whether the enlarged view suppresses registrations.
+	unsigned int DiagDirtyAll = 0;
+
+	// Frame cost while a wide level is live, split by whether the frame was a
+	// forced whole-viewport one. Drives the automatic FullRedrawEvery.
+	bool FrameTimed = false;
+	bool FrameWasForced = false;
+	unsigned int FrameStartTick = 0;
+	double NormalFrameCost = 0.0;
+	double ForcedFrameCost = 0.0;
+
 	void SampleRegion(const unsigned char* pPixels, int pitch, const RectangleStruct& rect,
 		int stepX, int stepY, int& nonBlack, int& samples)
 	{
@@ -591,6 +635,32 @@ namespace
 				DiagSourceNonBlack, DiagSourceSamples, DiagDestNonBlack, DiagDestSamples);
 		}
 
+		// The two invalidation paths. A wide-only enqueue is one the engine's
+		// own cull would have dropped while zoomed out, i.e. exactly the bug
+		// this counter exists to prove or disprove.
+		Debug::Log("[ViewZoom] diag: dirty rects all %u | wide: logic %u (moved %u), in-window %u | visible-cell calls %u (candidates %u, wide-only %u, enqueued %u, left to the cap %u) | band fill restarts %u, cells pushed %u | forced full redraws %u (interval %d)\n",
+			DiagDirtyAll,
+			DiagDirtySeen, DiagDirtyCorrected, DiagDirtyInWindow,
+			DiagCellCalls, DiagCellSeen, DiagCellWideOnly, DiagCellEnqueued, DiagCellCapped,
+			DiagBandRestarts, DiagBandPushed, DiagForcedRedraws, DiagFullRedrawInterval);
+
+		DiagDirtyAll = 0;
+		DiagForcedRedraws = 0;
+		DiagBandRestarts = 0;
+		DiagBandPushed = 0;
+		DiagDirtyInWindow = 0;
+		DiagDirtyInWindowSamples = 0;
+
+		DiagDirtySeen = 0;
+		DiagDirtyCorrected = 0;
+		DiagDirtySamples = 0;
+		DiagCellSeen = 0;
+		DiagCellCalls = 0;
+		DiagCellWideOnly = 0;
+		DiagCellEnqueued = 0;
+		DiagCellCapped = 0;
+		DiagCellSamples = 0;
+
 		DiagWideFrames = 0;
 		DiagWideRoleA = 0;
 		DiagWideRoleB = 0;
@@ -615,6 +685,18 @@ bool ViewZoomClass::DebugFill = false;
 bool ViewZoomClass::Diagnostics = false;
 bool ViewZoomClass::NoBandFill = false;
 bool ViewZoomClass::SidebarNativeView = true;
+bool ViewZoomClass::TranslateDirtyAreas = true;
+// The wide-aware enqueue looked like the fix for the outer band, but in game it
+// makes things worse: the enlarged view has far more candidate cells than the
+// engine would ever queue, so the extra inserts fill the 799 entry list and the
+// engine's own registrations -- the ones that erase objects and animations --
+// are dropped by the cap (which also clears their pending flag). Measured
+// 2026-10-04: with it on the animation residue is dense, with it off only the
+// current frame is left. The dirty area translation alone keeps ore and cells
+// current, so this stays off by default and is kept only as an A/B switch.
+bool ViewZoomClass::WideCellEnqueue = false;
+bool ViewZoomClass::BandFillOnScroll = false;
+int ViewZoomClass::FullRedrawEvery = 0;
 
 int ViewZoomClass::LevelCount = DefaultLevelCount;
 int ViewZoomClass::CurrentLevel = 4;
@@ -651,8 +733,15 @@ DSurface* ViewZoomClass::pSavedTemp = nullptr;
 RectangleStruct ViewZoomClass::SavedViewBounds { 0, 0, 0, 0 };
 int ViewZoomClass::SavedViewBound[4] = { 0, 0, 0, 0 };
 bool ViewZoomClass::WideInstalled = false;
+bool ViewZoomClass::WideLevelLive = false;
 bool ViewZoomClass::SidebarViewActive = false;
 RectangleStruct ViewZoomClass::SidebarViewSaved { 0, 0, 0, 0 };
+bool ViewZoomClass::UiStepActive = false;
+DSurface* ViewZoomClass::UiStepSavedComposite = nullptr;
+DSurface* ViewZoomClass::UiStepSavedTile = nullptr;
+DSurface* ViewZoomClass::UiStepSavedTemp = nullptr;
+RectangleStruct ViewZoomClass::UiStepSavedViewBounds { 0, 0, 0, 0 };
+int ViewZoomClass::UiStepSavedViewBound[4] = { 0, 0, 0, 0 };
 
 void* ViewZoomClass::pBigShadowBuffer = nullptr;
 void* ViewZoomClass::pBigVisibilityBuffer = nullptr;
@@ -693,7 +782,10 @@ void ViewZoomClass::LoadFromINI(CCINIClass* pINI, const char* pSection)
 	Diagnostics = pINI->ReadBool(pSection, "ViewZoom.Diagnostics", false);
 	NoBandFill = pINI->ReadBool(pSection, "ViewZoom.NoBandFill", false);
 	SidebarNativeView = pINI->ReadBool(pSection, "ViewZoom.SidebarNativeView", true);
-
+	TranslateDirtyAreas = pINI->ReadBool(pSection, "ViewZoom.TranslateDirtyAreas", true);
+	WideCellEnqueue = pINI->ReadBool(pSection, "ViewZoom.WideCellEnqueue", false);
+	BandFillOnScroll = pINI->ReadBool(pSection, "ViewZoom.BandFillOnScroll", false);
+	FullRedrawEvery = pINI->ReadInteger(pSection, "ViewZoom.FullRedrawEvery", 8);
 	LevelCount = 0;
 
 	for (int i = 0; i < MaxLevels; ++i)
@@ -808,6 +900,7 @@ void ViewZoomClass::LoadFromINI(CCINIClass* pINI, const char* pSection)
 	NativeFrameValid = false;
 	SourceRect = { 0, 0, 0, 0 };
 	WideReady = false;
+	WideLevelLive = false;
 	BandFillActive = false;
 
 	if (!WideInstalled)
@@ -815,6 +908,14 @@ void ViewZoomClass::LoadFromINI(CCINIClass* pINI, const char* pSection)
 
 	Debug::Log("[ViewZoom] enabled %d, middle click reset %d, hint %d, wide %d, whole map %d, debugfill %d, diagnostics %d, %d levels\n",
 		Enabled, MiddleClickReset, ShowHint, WideView, WholeMap, DebugFill, Diagnostics, LevelCount);
+
+	// Whole-viewport repaints forced every N frames. 8 is the value that
+	// measured well in game at k = 1.25..2.5 (animation residue reduced to a
+	// momentary flicker while the frame rate stays acceptable), so it is the
+	// default; 0 measures the cost itself and adapts, < 0 disables the whole
+	// mechanism.
+	Debug::Log("[ViewZoom] translate dirty areas %d, wide cell enqueue %d, band fill on scroll %d, full redraw every %d (0=auto), sidebar native view %d, band fill %d\n",
+		TranslateDirtyAreas, WideCellEnqueue, BandFillOnScroll, FullRedrawEvery, SidebarNativeView, !NoBandFill);
 
 	for (int i = 0; i < LevelCount; ++i)
 	{
@@ -1175,6 +1276,7 @@ void ViewZoomClass::OnLevelChanged()
 	NativeFrameValid = false;
 	VisualReady = false;
 	WideReady = false;
+	WideLevelLive = false;
 
 	const double factor = GetFactor();
 
@@ -1307,6 +1409,7 @@ void ViewZoomClass::ReleaseBigSurfaces()
 	BigHeight = 0;
 	WideDestRect = { 0, 0, 0, 0 };
 	WideReady = false;
+	WideLevelLive = false;
 	BandFillActive = false;
 
 	ReleaseWideViewBuffers();
@@ -1441,6 +1544,7 @@ void ViewZoomClass::RestartBandFill()
 	BandFrames = 0;
 	BandPushed = 0;
 	BandCursorIndex = 0;
+	++DiagBandRestarts;
 
 	if (ShowHint)
 	{
@@ -1518,13 +1622,26 @@ void ViewZoomClass::RefreshBandFillCamera(int cameraX, int cameraY)
 	const bool moved = deltaX > BandCameraTolerance || deltaX < -BandCameraTolerance
 		|| deltaY > BandCameraTolerance || deltaY < -BandCameraTolerance;
 
-	if (moved)
-	{
-		BandLastCameraX = cameraX;
-		BandLastCameraY = cameraY;
+	if (!moved)
+		return;
 
-		RestartBandFill();
-	}
+	BandLastCameraX = cameraX;
+	BandLastCameraY = cameraY;
+
+	// Repairing on every camera move is what makes a zoomed-out pan stutter:
+	// each restart walks the map's whole cell vector again and then pushes up to
+	// 512 cells per frame through all twelve per-cell passes, on top of the work
+	// the engine already does. A pan therefore restarts the sweep every few
+	// frames, which is pure added cost. The sweep's job is only to paint a
+	// surface that has never been painted; a level change starts it directly
+	// (OnLevelChanged), and after that the incremental paths corrected by
+	// TranslateDirtyArea / TryWideCellEnqueue keep the enlarged view current.
+	// A/B switch: ViewZoom.BandFillOnScroll=true restores the old behaviour
+	// (but still never restarts a sweep that is already running).
+	if (!BandFillOnScroll || BandFillActive)
+		return;
+
+	RestartBandFill();
 }
 
 // Walks the map's cell grid and appends the next slice straight to the engine's
@@ -1637,6 +1754,7 @@ void ViewZoomClass::AdvanceBandFill(int budget)
 
 			++appended;
 			++BandPushed;
+			++DiagBandPushed;
 		}
 	}
 
@@ -1905,6 +2023,297 @@ bool ViewZoomClass::WantsWideView()
 		&& IsWideLevel(CurrentLevel) && GetFactor() > NativeFactor;
 }
 
+// Probe and mitigation for the residue that the engine's incremental
+// invalidation leaves behind while zoomed out (a chimney's smoke keeps every
+// frame it ever drew). The eight per-cell layers repaint the whole ViewBounds
+// when the passes get bFullRedraw, so forcing that flag every N frames bounds
+// (or, at N = 1, removes) whatever the per-frame invalidation missed. It also
+// answers whether the stale pixels live in the surface the layers repaint at
+// all -- if even N = 1 does not clear them, the residue is drawn somewhere our
+// repaint never touches.
+//
+// Cost is one whole-viewport pass (the ZBuffer/ABuffer are filled as well), so
+// this is off by default and only meant as a dial while the root cause is
+// being chased.
+bool ViewZoomClass::ShouldForceFullRedraw()
+{
+	if (FullRedrawEvery < 0 || !WideLevelLive || !WantsWideView())
+		return false;
+
+	int interval = FullRedrawEvery;
+
+	if (interval == 0)
+	{
+		// Automatic: keep the added cost of the forced repaints within a
+		// fraction of a normal frame. At k = 1.25..2.5 that fraction works out
+		// to roughly the validated interval of 8; a heavier viewport backs off
+		// on its own.
+		interval = 8;
+
+		if (NormalFrameCost > 1.0 && ForcedFrameCost > NormalFrameCost)
+		{
+			const double added = ForcedFrameCost - NormalFrameCost;
+			const double budget = 0.35 * NormalFrameCost;
+
+			if (added > budget)
+			{
+				interval = static_cast<int>(added / budget + 0.5);
+
+				if (interval < 8)
+					interval = 8;
+
+				if (interval > 240)
+					interval = 240;
+			}
+		}
+	}
+
+	if (--FullRedrawCountdown > 0)
+		return false;
+
+	FullRedrawCountdown = interval;
+	DiagFullRedrawInterval = interval;
+	FrameWasForced = true;
+
+	if (Diagnostics)
+		++DiagForcedRedraws;
+
+	return true;
+}
+
+// The enlarged viewport only exists between 0x4F44CB and 0x4F451B. Everywhere
+// else DSurface::ViewBounds and TacticalClass::TacticalPos describe the native
+// viewport, and the engine's own invalidation producers -- which all run from
+// game logic, never from the render passes -- use exactly those live values.
+//
+// TacticalClass::RegisterDirtyArea (0x6D2790) keeps its rectangles in
+// viewport-relative space and the layer passes turn them back into screen space
+// with the origin live at *consumption* time:
+//
+//     6D6D39: mov ebp,[edi+0xb0]      ; TacticalPos.X
+//     6D6D45: add eax,ebp             ; screenX = rect.X + TacticalPos.X - ViewBounds.X
+//
+// so a rectangle produced outside the window is short by (enlarged - native)/2
+// on each axis. The repaint then lands half the growth away from the cell that
+// actually changed, that cell keeps whatever the previous frame's scroll copy
+// left there (0x6D3FCF), and it never heals on its own. Moving the rectangle
+// here is the only place where the correction can be made: by the time the
+// layers consume it, the original origin is gone.
+void ViewZoomClass::TranslateDirtyArea(RectangleStruct& area)
+{
+	const bool wide = WideLevelLive && WantsWideView();
+
+	if (Diagnostics)
+		++DiagDirtyAll;
+
+	if (!wide)
+		return;
+
+	if (WideInstalled)
+	{
+		// Produced while the enlarged viewport is live: already in the enlarged
+		// space (this is the object and animation draw path, which runs in the
+		// object pass after the present). Nothing to move -- only measure.
+		if (Diagnostics)
+		{
+			++DiagDirtyInWindow;
+
+			if (DiagDirtyInWindowSamples < 2)
+			{
+				++DiagDirtyInWindowSamples;
+
+				const auto& view = DSurface::ViewBounds;
+
+				Debug::Log("[ViewZoom] dirty rect in window: %d,%d %dx%d | view %dx%d big %dx%d\n",
+					area.X, area.Y, area.Width, area.Height,
+					view.Width, view.Height, BigWidth, BigHeight);
+			}
+		}
+
+		return;
+	}
+
+	if (Diagnostics)
+		++DiagDirtySeen;
+
+	if (!TranslateDirtyAreas)
+		return;
+
+	if (BigWidth < 2 || BigHeight < 2)
+		return;
+
+	// Outside the render window this is the native rectangle, which is what the
+	// producer measured against.
+	const auto& native = DSurface::ViewBounds;
+
+	if (native.Width < 2 || native.Height < 2)
+		return;
+
+	const int shiftX = (BigWidth - native.Width) / 2;
+	const int shiftY = (BigHeight - native.Height) / 2;
+
+	if (shiftX <= 0 && shiftY <= 0)
+		return;
+
+	area.X += shiftX;
+	area.Y += shiftY;
+
+	if (Diagnostics)
+	{
+		++DiagDirtyCorrected;
+
+		if (DiagDirtySamples < 4)
+		{
+			++DiagDirtySamples;
+
+			Debug::Log("[ViewZoom] dirty rect moved %+d,%+d: %d,%d %dx%d -> %d,%d | native view %dx%d big %dx%d\n",
+				shiftX, shiftY,
+				area.X - shiftX, area.Y - shiftY, area.Width, area.Height,
+				area.X, area.Y,
+				native.Width, native.Height, BigWidth, BigHeight);
+		}
+	}
+}
+
+// TacticalClass::RegisterCellAsVisible (0x6DA7D0) is the only writer of the
+// visible-cell queue -- the 25 call sites are all game-logic entry points
+// (fog/shroud reveal, building destruction, cell occlusion recompute) and none
+// is reachable from TacticalClass::Render. The queue is what the per-cell
+// terrain/overlay layers draw from, and the overlay layer is the only caller of
+// CellClass::DrawOverlay, so a cell that never gets queued keeps its old pixels.
+//
+// The function culls the cell against DSurface::ViewBounds with TacticalPos as
+// origin (0x6DA901-0x6DA936). With the native rectangle live that rejects every
+// cell the enlarged view added. This reproduces the success path with the cull
+// widened to the enlarged viewport, and then stamps the cell's redraw frame so
+// the engine's own copy -- which runs right after this hook -- short-circuits
+// at its frame-stamp check (0x6DA7F1). Nothing has to be skipped and no stack
+// frame is disturbed.
+void ViewZoomClass::TryWideCellEnqueue(void* pCellVoid)
+{
+	if (!WideLevelLive || !WantsWideView())
+		return;
+
+	// Every call the engine makes while a wide level is live, whether or not
+	// the switch below lets us act on it. Together with the enqueue count this
+	// is how the queue pressure that starves the engine's own registrations
+	// becomes visible.
+	if (Diagnostics)
+		++DiagCellCalls;
+
+	if (WideInstalled || !WideCellEnqueue)
+		return;
+
+	CellClass* pCell = static_cast<CellClass*>(pCellVoid);
+
+	if (!pCell)
+		return;
+
+	TacticalClass* pTactical = TacticalClass::Instance;
+
+	if (!pTactical)
+		return;
+
+	// The engine's own two gates, in its own order.
+	const unsigned int frame = *reinterpret_cast<const unsigned int*>(CurrentFrameIndex);
+
+	if (*reinterpret_cast<const unsigned int*>(
+		reinterpret_cast<const unsigned char*>(pCell) + CellFrameStampOffset) == frame)
+	{
+		return;
+	}
+
+	const unsigned char flags = *reinterpret_cast<const unsigned char*>(
+		reinterpret_cast<const unsigned char*>(pCell) + CellFlagsOffset);
+
+	const unsigned char pending = *reinterpret_cast<const unsigned char*>(
+		reinterpret_cast<const unsigned char*>(pCell) + CellPendingFlagOffset);
+
+	if (!(flags & 8) && pending == 0)
+		return;
+
+	const auto& native = DSurface::ViewBounds;
+
+	if (native.Width < 2 || native.Height < 2 || BigWidth < 2 || BigHeight < 2)
+		return;
+
+	const int growX = BigWidth - native.Width;
+	const int growY = BigHeight - native.Height;
+
+	if (growX <= 0 && growY <= 0)
+		return;
+
+	const int halfX = growX > 0 ? growX / 2 : 0;
+	const int halfY = growY > 0 ? growY / 2 : 0;
+
+	// The engine's window, including its margins, then widened by exactly half
+	// the growth. Y's lower bound is the literal -30 in the engine, so it stays
+	// relative to the viewport top rather than to ViewBounds.Y.
+	const int nativeMinX = native.X - 30;
+	const int nativeMaxX = native.X + native.Width + 30;
+	const int nativeMinY = -30;
+	const int nativeMaxY = native.Y + native.Height + 15;
+
+	const int* pOrigin = reinterpret_cast<const int*>(
+		reinterpret_cast<const unsigned char*>(pTactical) + TacticalViewOrigin);
+
+	const Point2D screen = TacticalClass::CoordsToScreen(pCell->GetCellCoords());
+	const int relX = screen.X - pOrigin[0];
+	const int relY = screen.Y - pOrigin[1];
+
+	const bool nativeInside = relX >= nativeMinX && relX <= nativeMaxX
+		&& relY >= nativeMinY && relY <= nativeMaxY;
+
+	const bool wideInside = relX >= nativeMinX - halfX && relX <= nativeMaxX + halfX
+		&& relY >= nativeMinY - halfY && relY <= nativeMaxY + halfY;
+
+	if (!wideInside)
+		return;
+
+	if (Diagnostics)
+	{
+		++DiagCellSeen;
+
+		if (!nativeInside)
+			++DiagCellWideOnly;
+
+		if (DiagCellSamples < 4)
+		{
+			++DiagCellSamples;
+
+			Debug::Log("[ViewZoom] cell enqueue (%d,%d) rel %d,%d native %d | native view %dx%d big %dx%d\n",
+				pCell->GetCellCoords().X, pCell->GetCellCoords().Y, relX, relY,
+				nativeInside ? 1 : 0, native.Width, native.Height, BigWidth, BigHeight);
+		}
+	}
+
+	// Mirror the engine's success path exactly. If the list is full the engine
+	// would skip the insert, clear the pending flag and set Redrawing; leaving
+	// that to the engine keeps the cap semantics untouched.
+	if (pTactical->VisibleCellCount >= VisibleCellCapacity)
+	{
+		if (Diagnostics)
+			++DiagCellCapped;
+
+		return;
+	}
+
+	pTactical->VisibleCells[pTactical->VisibleCellCount] = pCell;
+	++pTactical->VisibleCellCount;
+
+	*reinterpret_cast<unsigned char*>(
+		reinterpret_cast<unsigned char*>(pCell) + CellPendingFlagOffset) = 0;
+
+	*reinterpret_cast<unsigned int*>(
+		reinterpret_cast<unsigned char*>(pCell) + CellFrameStampOffset) = frame;
+
+	*reinterpret_cast<unsigned char*>(
+		reinterpret_cast<unsigned char*>(pTactical) + TacticalRedrawFlagOffset) = 1;
+
+	if (Diagnostics)
+		++DiagCellEnqueued;
+}
+
 // Frame start, before the engine presents the previous frame (the presentation
 // happens at 0x53BAE0, between this point and InstallWideRender). The enlarged
 // pair must NOT be installed yet, otherwise that presentation reads the
@@ -1915,6 +2324,13 @@ void ViewZoomClass::BeginTacticalRender()
 	// the globals pointing at our pair.
 	if (WideInstalled)
 		EndTacticalRender();
+
+	// Frame timing for the automatic FullRedrawEvery. Only wide frames are
+	// measured, and the window closes in EndTacticalRender.
+	FrameTimed = WideLevelLive && WantsWideView();
+
+	if (FrameTimed)
+		FrameStartTick = GetTickCount();
 
 	// A click may have left the viewport globals describing the enlarged view;
 	// the frame starts from the native one.
@@ -2129,6 +2545,7 @@ void ViewZoomClass::InstallWideRender()
 	DSurface::Temp = pBigComposite;
 
 	WideInstalled = true;
+	WideLevelLive = true;
 
 	// The engine only draws what changed, so a freshly enlarged viewport would
 	// stay unpainted. Feed it one slice of the map per frame through its own
@@ -2151,9 +2568,27 @@ void ViewZoomClass::InstallWideRender()
 
 void ViewZoomClass::EndTacticalRender()
 {
+	// Close the frame timing first: the tactical passes have just finished.
+	if (FrameTimed)
+	{
+		FrameTimed = false;
+
+		const unsigned int elapsed = GetTickCount() - FrameStartTick;
+		double& cost = FrameWasForced ? ForcedFrameCost : NormalFrameCost;
+
+		cost = cost > 0.0
+			? cost * 0.9 + static_cast<double>(elapsed) * 0.1
+			: static_cast<double>(elapsed);
+
+		FrameWasForced = false;
+	}
+
 	// Safety net: the sidebar swap must never survive the frame.
 	if (SidebarViewActive)
 		EndSidebarNativeView();
+
+	// The same for the UI step's native surfaces.
+	EndUiNativeStep();
 
 	if (!WideInstalled)
 	{
@@ -2307,6 +2742,66 @@ void ViewZoomClass::EndSidebarNativeView()
 	SidebarViewActive = false;
 
 	++DiagSidebarNativePresents;
+}
+
+// 0x4F44F9..0x4F4505: the UI step between the tactical passes and the object
+// pass. The GScreenClass virtual at 0x4F4502 redraws the sidebar and the bottom
+// bar; natively it draws them into DSurface::Temp, which at this point aliases
+// the native Composite (0x4F4492 set Temp := Composite before the passes).
+//
+// Inside the widened window Temp points at the enlarged Composite, so the
+// bottom bar strip is written at native coordinates into the enlarged surface
+// -- inside the map area, since the enlarged surface is taller than the native
+// view -- and our downscale then bakes it into the battlefield. (Measured: the
+// strip lands at the native view height, i.e. around 4/5 of the map height at
+// 1.25x.)
+//
+// The whole step therefore runs against the native pair and the native
+// rectangle, exactly as it would without the zoom. Everything is put back at
+// 0x4F4505, before the object pass needs the enlarged pair again.
+void ViewZoomClass::BeginUiNativeStep()
+{
+	if (UiStepActive || !WideInstalled)
+		return;
+
+	if (!pSavedComposite || !pSavedTile || !pSavedTemp)
+		return;
+
+	UiStepSavedComposite = DSurface::Composite;
+	UiStepSavedTile = DSurface::Tile;
+	UiStepSavedTemp = DSurface::Temp;
+	UiStepSavedViewBounds = DSurface::ViewBounds;
+
+	const int* pViewBound = reinterpret_cast<const int*>(TacticalViewBound);
+
+	for (int i = 0; i < 4; ++i)
+		UiStepSavedViewBound[i] = pViewBound[i];
+
+	DSurface::Composite = pSavedComposite;
+	DSurface::Tile = pSavedTile;
+	DSurface::Temp = pSavedTemp;
+	DSurface::ViewBounds = SavedViewBounds;
+	WriteViewBound(SavedViewBounds);
+
+	UiStepActive = true;
+}
+
+void ViewZoomClass::EndUiNativeStep()
+{
+	if (!UiStepActive)
+		return;
+
+	DSurface::Composite = UiStepSavedComposite;
+	DSurface::Tile = UiStepSavedTile;
+	DSurface::Temp = UiStepSavedTemp;
+	DSurface::ViewBounds = UiStepSavedViewBounds;
+
+	int* pViewBound = reinterpret_cast<int*>(TacticalViewBound);
+
+	for (int i = 0; i < 4; ++i)
+		pViewBound[i] = UiStepSavedViewBound[i];
+
+	UiStepActive = false;
 }
 
 // ---------------------------------------------------------------------------

@@ -47,6 +47,10 @@ public:
 	static bool Diagnostics;
 	static bool NoBandFill;    // A/B switch: skip the banded fill
 	static bool SidebarNativeView;   // A/B switch: sidebar present sees the native view
+	static bool TranslateDirtyAreas; // A/B switch: move logic-time dirty rects into the enlarged space
+	static bool WideCellEnqueue;     // A/B switch: enqueue visible cells against the enlarged view
+	static bool BandFillOnScroll;    // A/B switch: repair the enlarged view on every camera move
+	static int FullRedrawEvery;      // 0 = off; force one whole-viewport repaint every N frames
 
 	static int LevelCount;
 	static int CurrentLevel;
@@ -136,6 +140,17 @@ public:
 	static void BeginSidebarNativeView();
 	static void EndSidebarNativeView();
 
+	// The UI step between the second tactical pass and the object pass
+	// (0x4F44F9..0x4F4505, the GScreenClass virtual at 0x4F4502) redraws the
+	// sidebar and the bottom bar and, natively, draws them into
+	// DSurface::Temp, which at that point aliases the native Composite.
+	// Inside the widened window Temp points at the enlarged Composite, so that
+	// strip is written at native coordinates into the enlarged surface and then
+	// scaled down with the map -- the bottom bar texture appearing across the
+	// battlefield. The whole step therefore runs against the native pair.
+	static void BeginUiNativeStep();
+	static void EndUiNativeStep();
+
 	// A match always starts from the native level. The zoom is per-match view
 	// state and must never be carried into the next one, so every entry point
 	// that starts one (see the hooks on ScenarioClass::StartScenario and
@@ -144,6 +159,34 @@ public:
 	static bool WantsWideView();
 	static bool IsWideInstalled() { return WideInstalled; }
 	static void RequestFullRedraw();
+
+	// ---- invalidation producers that run outside the render window ----
+	//
+	// The renderer's invalidation inputs are all expressed relative to the
+	// *live* TacticalPos / ViewBounds, but the enlarged viewport only exists
+	// between 0x4F44CB and 0x4F451B. Producers that run from game logic (and
+	// the visible-cell enqueue, which is called from nothing else) therefore
+	// hand the renderer geometry that describes the native viewport:
+	//
+	//   0x6D2790 RegisterDirtyArea stores viewport-relative rectangles, and
+	//     the layer passes turn them back into screen space with the origin
+	//     that is live when they consume them. A rectangle registered outside
+	//     the window is off by (enlarged - native) / 2 on both axes.
+	//
+	//   0x6DA7D0 RegisterCellAsVisible culls the cell against
+	//     DSurface::ViewBounds at call time, so with the native rectangle
+	//     live every cell outside the native view is dropped even though the
+	//     player can see it.
+	//
+	// Both are corrected here, while the original engine code stays in charge.
+	static void TranslateDirtyArea(RectangleStruct& area);
+	static void TryWideCellEnqueue(void* pCell);
+
+	// Probe / mitigation for the residue that incremental invalidation leaves
+	// behind while zoomed out: force the engine's own full tactical repaint
+	// (the three Render passes get bFullRedraw, so all eight per-cell layers
+	// draw the whole enlarged ViewBounds) every N frames. 0 disables it.
+	static bool ShouldForceFullRedraw();
 
 	static int GetEffectiveViewWidth();
 	static int GetEffectiveViewHeight();
@@ -170,10 +213,25 @@ private:
 	static int SavedViewBound[4];
 	static bool WideInstalled;
 
+	// True from the first successful install of the enlarged pair for the
+	// current level until the level changes. The invalidation corrections above
+	// are only valid while the enlarged pair really is the render target: if
+	// the pair cannot be built the level falls back to native rendering and
+	// nothing may be moved.
+	static bool WideLevelLive;
+
 	// The sidebar present runs with the native viewport for exactly one call;
 	// these hold what has to be put back (see BeginSidebarNativeView).
 	static bool SidebarViewActive;
 	static RectangleStruct SidebarViewSaved;
+
+	// The UI step runs against the native surfaces for exactly one call.
+	static bool UiStepActive;
+	static DSurface* UiStepSavedComposite;
+	static DSurface* UiStepSavedTile;
+	static DSurface* UiStepSavedTemp;
+	static RectangleStruct UiStepSavedViewBounds;
+	static int UiStepSavedViewBound[4];
 
 	// Two engine scratch buffers (0x887644, 0x87E8A4) are `view * 2` bytes each
 	// and are only rebuilt by the engine's own view routine. They are rebuilt

@@ -391,7 +391,24 @@ DEFINE_HOOK(0x6D4571, ViewZoomDiag_ListClear, 0xA)
 // are fed again here so they are still in the list when the draw happens.
 DEFINE_HOOK(0x4F4505, ViewZoom_PreCellDraw, 0x6)
 {
+	// The UI step in between ran against the native pair; the object pass needs
+	// the enlarged one back.
+	ViewZoomClass::EndUiNativeStep();
+
 	ViewZoomClass::InjectBandFill(0x200);
+
+	return 0;
+}
+
+// 004F44F9..004F4504: the UI step (sidebar and bottom bar) between the second
+// tactical pass and the object pass. It has to draw against the native
+// surfaces, otherwise the bottom bar strip lands inside the enlarged map. The
+// covered instructions are the argument setup and the engine's own
+// `call [edx+40h`]; returning 0 lets the engine run them, so only the state is
+// swapped here and restored at 004F4505.
+DEFINE_HOOK(0x4F44F9, ViewZoom_UiStepNativeSurfaces, 0xC)
+{
+	ViewZoomClass::BeginUiNativeStep();
 
 	return 0;
 }
@@ -412,13 +429,17 @@ DEFINE_HOOK(0x4F44AF, ViewZoom_PreTacticalRender, 0x5)
 
 	ViewZoomClass::BeginTacticalRender();
 
+	// Evaluated exactly once per frame, whatever the other terms decide.
+	const bool forcePeriodic = ViewZoomClass::ShouldForceFullRedraw();
+
 	// One complete native pass is needed whenever the zoom starts or stops
 	// (the surfaces still hold the other mode's pixels), whenever the magnify
 	// backup cannot be restored -- first zoomed frame, surface loss, or a
 	// changed view geometry -- and on the first frame of an enlarged pair.
 	if (wasActive != ViewZoomClass::Active
 		|| (ViewZoomClass::Active && !ViewZoomClass::RestoreNativeFrame())
-		|| (ViewZoomClass::WantsWideView() && !ViewZoomClass::WideReady))
+		|| (ViewZoomClass::WantsWideView() && !ViewZoomClass::WideReady)
+		|| forcePeriodic)
 	{
 		R->EAX(FullRedrawMode);
 	}
@@ -701,3 +722,65 @@ DEFINE_HOOK(0x6A7089, ViewZoom_ToolTipFullRedraw, 0x7)
 
 	return Continue;
 }
+
+// 006D2790: TacticalClass::RegisterDirtyArea(RectangleStruct Area, bool).
+//
+// Every invalidation the engine produces for the map -- ore being harvested
+// (CellClass::ReduceTiberium at 00480A80, site 00480C8F), a cell being marked
+// for redraw (00486E66), object and building render rectangles, terrain
+// changes -- arrives here as a *viewport-relative* rectangle, and the eight
+// per-cell layer passes convert it back to screen space with the origin that is
+// live when they consume it:
+//
+//     006D6D39: mov ebp,[edi+0b0h]   ; TacticalPos.X
+//     006D6D45: add eax,ebp          ; screenX = rect.X + TacticalPos.X - ViewBounds.X
+//
+// The enlarged viewport only exists between 004F44CB and 004F451B, and none of
+// these producers runs from the render passes, so while zoomed out they measure
+// against the native origin (camera - native / 2) while the layers reinterpret
+// against the enlarged one (camera - big / 2). The rectangle is short by
+// (big - native) / 2 on each axis, the repaint lands half the growth away from
+// the cell that changed, and that cell keeps the previous frame's pixels from
+// the scroll copy at 006D3FCF forever -- the observed "the ore stays on the map
+// until the view is scrolled away and back".
+//
+// The engine's own argument copy is edited in place; the callee reads its
+// parameter from that stack slot and the caller is `ret 14h`, so nothing else
+// depends on the value.
+DEFINE_HOOK(0x6D2790, ViewZoom_RegisterDirtyArea_Translate, 0x9)
+{
+	RectangleStruct* pArea = reinterpret_cast<RectangleStruct*>(R->ESP() + 0x4u);
+
+	if (pArea)
+		ViewZoomClass::TranslateDirtyArea(*pArea);
+
+	return 0;
+}
+
+// 006DA7D0: TacticalClass::RegisterCellAsVisible(CellClass*).
+//
+// The only writer of the visible-cell queue in the whole binary is 006DA949,
+// inside this function, and all 25 of its call sites are game-logic entry
+// points (fog/shroud reveal, building destruction, cell occlusion recompute) --
+// none is reachable from TacticalClass::Render. The queue is what the per-cell
+// terrain and overlay layers draw from, and CellClass::DrawOverlay (0047F6A0)
+// is called from nothing but those layers, so a cell that never enters the
+// queue simply keeps its old pixels.
+//
+// The function culls the cell against DSurface::ViewBounds with TacticalPos as
+// the origin (006DA901-006DA936). Outside the render window that is the native
+// rectangle, so every cell the enlarged view added is rejected while zoomed
+// out. The callback enqueues those cells itself with the enlarged window, then
+// stamps the cell's redraw frame -- the engine's own frame-stamp check at
+// 006DA7F1 makes its copy a no-op, so there is no double insert and no need to
+// skip any instruction.
+DEFINE_HOOK(0x6DA7D0, ViewZoom_RegisterCellAsVisible_Wide, 0x5)
+{
+	void* pCell = reinterpret_cast<void*>(R->Stack32(0x4u));
+
+	if (pCell)
+		ViewZoomClass::TryWideCellEnqueue(pCell);
+
+	return 0;
+}
+

@@ -422,6 +422,10 @@ HideShakeEffects=false           ; boolean
 :open:
 
 #### New:
+- [Tactical view zoom](User-Interface.md#tactical-view-zoom) (by laowang)
+  - The tactical map is rendered at a resolution of its own, so it can be zoomed in and out while the UI keeps the resolution the game is set to. Zooming in magnifies a centred crop of the native viewport; zooming out really renders a larger viewport, so the engine draws the cells that were outside the native view - the map is not stretched.
+  - `ViewZoom.Levels` is a configurable table of map resolution multipliers, with a runtime whole-map level that is fitted and letterboxed into the map area. Every match starts at the level that matches the resolution, and the resolution stored in the game options is never modified.
+  - Three rebindable hotkeys (zoom in, zoom out, reset) in the "Interface" category, plus a middle-click reset.
 - [SweepFire](New-or-Enhanced-Logics.md#sweepfire) (by laowang)
   - One trigger fires a whole series of real shots along a configurable line while the engine accounts for it as a single shot, so ammo, `ROF` and `Burst` stay vanilla.
   - Each follow-up shot is a real projectile with its own trajectory, warhead and effects, and can be intercepted individually.

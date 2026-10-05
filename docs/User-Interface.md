@@ -424,6 +424,58 @@ In `rulesmd.ini`:
 ShowTimer.Priority=0  ; integer
 ```
 
+### Tactical view zoom
+
+- The tactical map is rendered at a resolution of its own, so it can be zoomed in and out while the **interface keeps the resolution the game is set to**: the sidebar, the fonts, the buttons and the menus never scale with the map.
+- Zooming in (`k < 1`) keeps the native viewport and magnifies a centred crop of it, so it costs no additional rendering. Zooming out (`k > 1`) really renders a larger viewport - the engine draws the cells that were outside the native view - and the finished frame is scaled back down into the map area. Units and terrain therefore shrink together and stay geometrically consistent.
+- `1.0` is the level that matches the resolution the game is set to, and every match starts there. Zooming never changes the resolution stored in the game options.
+- The map area is clipped to the viewport at every level. The whole-map level derives its factor from the map size at runtime, so its map bounds rectangle has a different aspect ratio; it is fitted uniformly into the map area and letterboxed.
+- Zoom is per-match view state: it is reset on campaign start, on loading a saved game and on every other entry point that starts a match.
+- Controls, all rebindable in the game's keyboard options under the "Interface" category:
+  - ["Zoom In (Tactical View)"](#zoom-in-tactical-view) - one level towards `k < 1`.
+  - ["Zoom Out (Tactical View)"](#zoom-out-tactical-view) - one level towards `k > 1`.
+  - ["Reset Tactical View Zoom"](#reset-tactical-view-zoom) - back to level `1.0`.
+  - A middle click on the tactical view does the same as the reset command while `ViewZoom.MiddleClickReset` is enabled.
+
+In `RA2MD.INI`:
+```ini
+[Phobos]
+ViewZoom.Enable=true
+ViewZoom.Levels=0.25,0.33,0.5,0.67,1.0,1.25,1.5,2.0,2.5
+ViewZoom.WideView=false
+ViewZoom.WholeMap=true
+ViewZoom.MiddleClickReset=true
+ViewZoom.ShowHint=true
+ViewZoom.FullRedrawEvery=8
+ViewZoom.MaxStaticSkip=4
+ViewZoom.TranslateDirtyAreas=true
+ViewZoom.SidebarNativeView=true
+ViewZoom.BandFillOnScroll=false
+ViewZoom.WideCellEnqueue=false
+ViewZoom.NoBandFill=false
+ViewZoom.DebugFill=false
+ViewZoom.Diagnostics=false
+```
+
+- `ViewZoom.Enable` - master switch for the whole feature. (boolean)
+- `ViewZoom.Levels` - the level table as map resolution multipliers, in ascending order: `k < 1` zooms in, `k > 1` zooms out. The keyword `full` (also `whole`, `wholemap` or `all`) puts the runtime whole-map level at that position in the table. (list of floating point values)
+- `ViewZoom.WideView` - enables the zoom-out levels. Zooming in works without it, and it is off by default. (boolean)
+- `ViewZoom.WholeMap` - allows the whole-map level to be used at all. (boolean)
+- `ViewZoom.MiddleClickReset` - a middle click on the tactical view returns to level `1.0`. (boolean)
+- `ViewZoom.ShowHint` - announces the new level on the message bar and in the log on every level change. (boolean)
+- `ViewZoom.FullRedrawEvery` - forces one whole-viewport engine repaint every N frames. The engine only redraws what its invalidation asks for, so this bounds whatever residue that leaves behind while zoomed out. `-1` disables it, `0` derives the interval from the measured cost of a forced frame. (integer)
+- `ViewZoom.MaxStaticSkip` - while a zoomed-out level is active, a frame that changed nothing and did not move the camera skips the map resample entirely. This caps how many frames in a row may be skipped before one is forced, which is what bounds a drawing path that changes pixels without reporting them. `0` disables the skip. (integer)
+- `ViewZoom.TranslateDirtyAreas` - the renderer's invalidation inputs are expressed relative to the live viewport, which outside the render window is the native one; this moves the rectangles registered by the producers into the enlarged view. (boolean)
+- `ViewZoom.SidebarNativeView` - presents the sidebar against the native viewport. Turning it off restores the old behaviour, where the sidebar is placed past the right edge of the window at zoomed-out levels and stops updating, so it should stay on. (boolean)
+- `ViewZoom.BandFillOnScroll` and `ViewZoom.WideCellEnqueue` - the two invalidation repairs that were tried and measured to cost more than they save. Both are off. (boolean)
+- `ViewZoom.NoBandFill` - skips the banded sweep that paints a freshly enlarged surface for the first time. Only useful for A/B testing. (boolean)
+- `ViewZoom.DebugFill` - paints the map area magenta instead of the frame, for diagnosing which surface is presented. (boolean)
+- `ViewZoom.Diagnostics` - writes a performance and geometry report to the log every few seconds. (boolean)
+
+```{note}
+Zooming out multiplies the number of cells the engine draws by `k²`, and a frame is bounded by a single CPU core, so the zoomed-out levels trade frame time for how much of the map is visible. The level table is the place to trim them: removing `2.0` and `2.5` drops the two most expensive levels.
+```
+
 ### Task subtitles display in the middle of the screen
 
 ![Message Display In Center](_static/images/messagedisplayincenter.gif)
@@ -635,6 +687,21 @@ SelectCapturedKeyEnabled=false    ; boolean
 - Triggers the [SpecialAction](New-or-Enhanced-Logics.md#specialaction) of every currently selected object that has one configured.
 - One key handles everything, and no action needs a target. `Weapon` arms the selected units so that their next firing cycle uses the ability's weapon; they then attack normally with it. See [SpecialAction](New-or-Enhanced-Logics.md#specialaction) for details.
 - For localization add `TXT_SPECIAL_ACTION` and `TXT_SPECIAL_ACTION_DESC` into your `.csf` file.
+
+### `[ ]` Zoom In (Tactical View)
+
+- Moves the [tactical view zoom](#tactical-view-zoom) one level towards `k < 1`, magnifying the map.
+- For localization add `TXT_VIEW_ZOOM_IN` and `TXT_VIEW_ZOOM_IN_DESC` into your `.csf` file.
+
+### `[ ]` Zoom Out (Tactical View)
+
+- Moves the [tactical view zoom](#tactical-view-zoom) one level towards `k > 1`, showing more of the map. Requires `ViewZoom.WideView=true`.
+- For localization add `TXT_VIEW_ZOOM_OUT` and `TXT_VIEW_ZOOM_OUT_DESC` into your `.csf` file.
+
+### `[ ]` Reset Tactical View Zoom
+
+- Returns the [tactical view zoom](#tactical-view-zoom) to level `1.0`, the level that matches the resolution the game is set to.
+- For localization add `TXT_VIEW_ZOOM_RESET` and `TXT_VIEW_ZOOM_RESET_DESC` into your `.csf` file.
 
 ## Loading screen
 

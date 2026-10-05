@@ -884,8 +884,10 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 {
 	GET(AircraftClass* const, pThis, ESI);
 
-	// Missile.Homing: 每帧刷新制导瞄准 / 对空接近自爆
-	AircraftExt::UpdateMissileHoming(pThis);
+	// Missile.Homing: 每帧刷新制导瞄准 / 对空接近自爆。
+	// 对空自爆会把弹体无声抹除(不触发死亡武器), 此后 pThis 及其扩展都已失效。
+	if (AircraftExt::UpdateMissileHoming(pThis))
+		return 0;
 
 	// AdvancedAircraftMissions: 记录击杀点 + 收尾返航提速窗口（每台机同帧一致）
 	AdvancedMissions::Update(pThis);

@@ -1,5 +1,6 @@
 #include "Body.h"
 
+#include <AircraftTrackerClass.h>
 #include <Kamikaze.h>
 #include <RocketLocomotionClass.h>
 #include <algorithm>
@@ -156,7 +157,7 @@ namespace
 	}
 
 	// 在单位坐标处施放导弹载荷, 并移除导弹本体。
-	// 返回值: true = 已引爆并销毁弹体 (此后 pMissile 的扩展可能已被回收, 调用方必须
+	// 返回值: true = 已引爆并无声抹除弹体 (此后 pMissile 及其扩展均已失效, 调用方必须
 	// 立刻返回, 不得再访问); false = 未配置可复用载荷, 什么都没做, 交回原版落地行为。
 	bool HomingAirBurst(AircraftClass* pMissile, TechnoClass* pTarget, AircraftTypeExt* pTypeExt)
 	{
@@ -178,9 +179,16 @@ namespace
 		// 在目标单位当前坐标(含高度)引爆
 		WarheadTypeExt::DetonateAt(warhead, pTarget->GetCenterCoords(), pMissile, damage, pMissile->Owner);
 
-		// 从俯冲管理器摘除并销毁导弹本体
+		// 载荷已经由上面施加, 弹体必须"无声"抹除: 不能再走正常死亡流程, 否则命中点会
+		// 再吃一次 TechnoClass::FireDeathWeapon (0x70D690) 打出的武器 —— 它先读类型的
+		// DeathWeapon, 再回退 [CombatDamage] 的全局 DeathWeapon (MO 配了
+		// DefaultDeathWeapon), Ares 也允许子机导弹自带武器/死亡武器 —— 同一发导弹就会
+		// 造成两次伤害。
+		// 这里的顺序与引擎自己的导弹载荷例程(0x663030 以 AircraftTrackerClass::Remove
+		// 开头、以 UnInit 收尾)以及 Mix 在 0x662FD8 的清理写法一致。
 		Kamikaze::Instance.Remove(pMissile);
-		pMissile->ReceiveDamage(&pMissile->Health, 0, RulesClass::Instance->C4Warhead, nullptr, true, false, nullptr);
+		AircraftTrackerClass::Instance.Remove(pMissile);
+		pMissile->UnInit();
 
 		return true;
 	}
@@ -267,18 +275,20 @@ bool AircraftExt::IsTrackedTargetValid(TechnoClass* pTarget)
 	return false;
 }
 
-// Missile.Homing: 每帧刷新瞄准点 / 对空接近自爆 (由 AircraftClass 每帧更新处调用)
-void AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
+// Missile.Homing: 每帧刷新瞄准点 / 对空接近自爆 (由 AircraftClass 每帧更新处调用)。
+// 返回 true = 对空自爆已把弹体无声抹除, 此后 pMissile 及其扩展均已失效, 调用方
+// 必须立即收尾, 不得再访问; 返回 false = 弹体仍有效, 可继续按常规处理。
+bool AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
 {
 	auto const pExt = AircraftExt::TryFetch(pMissile);
 	if (!pExt || !pExt->Homing_Active)
-		return;
+		return false;
 
 	if (!pMissile->IsAlive || pMissile->InLimbo)
 	{
 		pExt->Homing_Active = false;
 		pExt->Homing_Target = nullptr;
-		return;
+		return false;
 	}
 
 	auto const pTypeExt = pExt->GetTypeExtData();
@@ -286,7 +296,7 @@ void AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
 	{
 		pExt->Homing_Active = false;
 		pExt->Homing_Target = nullptr;
-		return;
+		return false;
 	}
 
 	// 目标死亡/隐形/消失: 飞往最后记录点后由原版落地引爆 (Kratos 同款失锁语义)
@@ -306,7 +316,7 @@ void AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
 		if (auto const pCell = MapClass::Instance.TryGetCellAt(pExt->Homing_LastAim))
 			pMissile->SetDestination(pCell, true);
 
-		return;
+		return false;
 	}
 
 	const bool targetInAir = pTarget->IsInAir();
@@ -341,15 +351,15 @@ void AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
 			|| sweptFuzeHit
 			|| (distXY < burstRangeXY && descendedNearPlane))
 		{
-			// 引爆成功时弹体已被销毁(扩展可能同时被回收), 必须立刻返回;
+			// 引爆成功时弹体已被无声抹除(扩展同时失效), 必须立刻返回;
 			// 未配置载荷时什么都没发生, 继续本帧的瞄准刷新。
 			if (HomingAirBurst(pMissile, pTarget, pTypeExt))
-				return;
+				return true; // 弹体已抹除, 调用方不得再碰 pMissile / pExt
 		}
 	}
 
 	if (!pExt->Homing_Active) // 防御: 制导已在别处关闭时不再写瞄点
-		return;
+		return false;
 
 	// 阶段 1 (T2): 瞄准点由"目标当前坐标"升级为"预判拦截点"。LeadFactor=0、
 	// 没有上一帧数据或导弹尚未移动时, 该函数原样返回目标当前坐标, 即退化为
@@ -380,6 +390,8 @@ void AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
 	pExt->Homing_MissilePrev = misCrd;
 	pExt->Homing_TargetPrev = targetCrd;
 	pExt->Homing_HasPrev = true;
+
+	return false;
 }
 
 // Paradrop, spy plane, airstrike.

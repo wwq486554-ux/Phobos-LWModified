@@ -84,7 +84,8 @@ public:
 
 	// Missile.Homing 制导: 发射时锁定目标 / 每帧刷新瞄准
 	static void StartMissileHoming(AircraftClass* pMissile, TechnoClass* pTarget);
-	static void UpdateMissileHoming(AircraftClass* pMissile);
+	// 返回 true = 对空自爆已把弹体抹除, 此后 pMissile / 其扩展均失效, 调用方必须立即收尾
+	static bool UpdateMissileHoming(AircraftClass* pMissile);
 	// 目标是否仍在 TechnoClass::Array 中 (对象删除前必先移出数组);
 	// 用于在对目标解引用前验活, 防止访问已释放对象。
 	static bool IsTrackedTargetValid(TechnoClass* pTarget);

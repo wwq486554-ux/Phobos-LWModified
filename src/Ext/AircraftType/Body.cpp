@@ -132,6 +132,7 @@ void AircraftTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Homing_LeadFactor.Read(exINI, pSection, "Missile.Homing.LeadFactor");
 	this->Homing_MaxLeadTime.Read(exINI, pSection, "Missile.Homing.MaxLeadTime");
 	this->Homing_FuzeRadius.Read(exINI, pSection, "Missile.Homing.FuzeRadius");
+	this->Homing_AbortDive.Read(exINI, pSection, "Missile.Homing.AbortDive");
 
 	if (this->Missile_Homing)
 	{
@@ -236,6 +237,7 @@ void AircraftTypeExt::Serialize(T& Stm)
 		.Process(this->Homing_LeadFactor)
 		.Process(this->Homing_MaxLeadTime)
 		.Process(this->Homing_FuzeRadius)
+		.Process(this->Homing_AbortDive)
 		;
 }
 

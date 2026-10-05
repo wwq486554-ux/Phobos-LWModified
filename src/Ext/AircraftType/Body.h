@@ -54,6 +54,7 @@ public:
 	Nullable<double> Homing_LeadFactor; // Missile.Homing.LeadFactor (0 = 纯追踪=现状, 1 = 理论拦截点)
 	Nullable<int> Homing_MaxLeadTime; // Missile.Homing.MaxLeadTime (帧, 提前量时间上限)
 	Nullable<int> Homing_FuzeRadius; // Missile.Homing.FuzeRadius (leptons, 扫掠段引信半径)
+	Nullable<bool> Homing_AbortDive; // Missile.Homing.AbortDive (yes=目标还远时可中止俯冲拉起, no=提交俯冲砸地)
 
 	explicit AircraftTypeExt(AircraftTypeClass* const OwnerObject) : TechnoTypeExt(OwnerObject)
 		, VoicePickup {}
@@ -96,6 +97,7 @@ public:
 		, Homing_LeadFactor {}
 		, Homing_MaxLeadTime {}
 		, Homing_FuzeRadius {}
+		, Homing_AbortDive {}
 	{ }
 
 	AircraftTypeClass* OwnerObject() const

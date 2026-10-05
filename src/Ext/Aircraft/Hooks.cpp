@@ -1731,6 +1731,11 @@ DEFINE_HOOK(0x662CAC, RocketLocomotionClass_Process_SkipTerminalDive_Homing, 0x6
 		|| pTarget->CloakState == CloakState::Cloaked)
 		return 0;
 
+	// Missile.Homing.AbortDive=no: 提交俯冲, 不再中止 —— 导弹保持俯冲姿态砸向当时
+	// 的瞄准点, 既不拉起也不掉头重追("擦过去就擦过去"); 默认 yes = 允许中止。
+	if (!pTypeExt->Homing_AbortDive.Get(true))
+		return 0;
+
 	// 目标还远(水平距离大于阈值, 默认 2 格): 中止俯冲, 回巡航段继续追
 	auto const misCrd = pMissile->GetCoords();
 	auto const aimCrd = pTarget->GetCenterCoords();

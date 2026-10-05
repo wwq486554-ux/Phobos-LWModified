@@ -51,6 +51,7 @@ public:
 	static bool WideCellEnqueue;     // A/B switch: enqueue visible cells against the enlarged view
 	static bool BandFillOnScroll;    // A/B switch: repair the enlarged view on every camera move
 	static int FullRedrawEvery;      // 0 = off; force one whole-viewport repaint every N frames
+	static int MaxStaticSkip;        // 0 = off; skip the resample for at most N unchanged frames
 
 	static int LevelCount;
 	static int CurrentLevel;
@@ -280,6 +281,48 @@ public:
 	static void BeginInputViewport();
 	static void EndInputViewport();
 
+	// ---- skipping the resample on frames that cannot have changed ----
+	//
+	// The engine draws only what its invalidation asked for, so a frame that
+	// registers neither a dirty area nor a cell leaves the enlarged surface
+	// exactly as it was -- and the native pair still holds the image downscaled
+	// from it. Regenerating that image is the single most expensive thing this
+	// feature does, so those frames skip it outright.
+	//
+	// Every producer of enlarged-surface content reports through one of these; a
+	// producer that is not listed only costs at most MaxStaticSkip frames of
+	// staleness before a resample is forced anyway, which is the net under the
+	// ones that draw into the viewport directly.
+	//
+	//   MarkWideFrameRect   -- a change whose rectangle is known (enlarged
+	//                          coordinates). Enables the partial resample.
+	//   NoteFrameCellEnqueued -- a cell was queued; the change is real, but its
+	//                          rectangle is not reported, so the rectangles already
+	//                          collected stay trusted.
+	//   MarkWideFrameContent -- a change with no rectangle at all (band fill,
+	//                          surface pair rebuilt, level change). Forces the
+	//                          next resample to cover the whole view.
+	static void MarkWideFrameRect(const RectangleStruct& enlargedRect);
+	static void NoteFrameCellEnqueued();
+	static void MarkWideFrameContent();
+	static void NoteFrameRedrawMode(bool fullRepaint);
+
+	// Diagnostics: frames the resample was skipped for, partial, or had to cover
+	// the whole view since the last call. `Marked` counts frames a content
+	// producer reported, `FullRepaint` frames the engine asked for a whole
+	// viewport repaint -- between them they say which condition kept the skip
+	// from firing.
+	struct SkipDiagnostics
+	{
+		unsigned int Skipped;
+		unsigned int Marked;
+		unsigned int FullRepaint;
+		unsigned int Partial;
+		unsigned int PartialAreaPerMille;   // mean, per thousand of the full view
+	};
+
+	static SkipDiagnostics TakeSkipDiagnostics();
+
 private:
 	static int TracePreviousOrigin[2];
 	static int TraceCamera[2];
@@ -291,6 +334,43 @@ private:
 	static int SavedInputTacticalPos[2];
 	static int InputTraceCount;
 
+	// --- skip state ---
+	static bool FrameContentChanged;   // a content producer reported this frame
+	static bool FrameFullRepaint;      // 004F44AF saw a whole-viewport redraw mode
+	static unsigned int StaticSkipRun; // consecutive frames skipped so far
+	static int LastDownscaleCamera[2]; // camera of the frame that was last resampled
+	static unsigned int DiagSkippedResamples;
+	static unsigned int DiagMarkedFrames;
+	static unsigned int DiagFullRepaintFrames;
+
+	// --- partial resample state ---
+	//
+	// The frame's dirty set is kept as one column range per destination row
+	// (view coordinates) rather than as a single bounding box: the rectangles the
+	// engine reports are scattered over the map, and their union is the whole
+	// view, while the ranges of one row usually stay narrow. Valid only while
+	// every change since the last resample came with a rectangle; the periodic
+	// full repaint (ViewZoom.FullRedrawEvery) is what bounds a producer that
+	// changes pixels without reporting them.
+	static constexpr int MaxSpanRows = 4096;
+
+	struct RowSpans
+	{
+		const unsigned short* pMinX;
+		const unsigned short* pMaxX;
+		int FirstRow;      // first row with a range
+		int LastRow;       // last row with a range; < FirstRow when there is none
+	};
+
+	static unsigned short FrameSpanMinX[MaxSpanRows];
+	static unsigned short FrameSpanMaxX[MaxSpanRows];
+	static int FrameSpanFirstRow;
+	static int FrameSpanLastRow;
+	static unsigned long long FrameSpanArea;   // summed range widths of the frame
+	static bool FrameSpansValid;
+	static unsigned int DiagPartialResamples;
+	static unsigned int DiagPartialAreaPerMille;
+
 	static void ReportLevel(const char* pAction);
 	static void OnLevelChanged();
 	static bool EnsureBigSurfaces(int width, int height);
@@ -299,5 +379,14 @@ private:
 	static void DestroySurface(DSurface* pSurface);
 	static bool FillNativeView(DSurface* pSurface);
 	static bool SeedBigSurfaces(DSurface* pSource);
-	static bool DownscaleToNative(DSurface* pSource, DSurface* pDestination);
+
+	// Nearest-neighbour downscale of the enlarged frame into the native view.
+	// `pSecond`, when given, holds a second native surface that has to end up
+	// with the same image; it is filled by the same phase walk instead of being
+	// resampled again (which used to double the cost of the whole section).
+	// `pSpans`, when given, restricts the pass to the column ranges the frame
+	// really changed: those rows are produced with exactly the pixels the full
+	// pass would have written there, and the rest of the view is left alone.
+	static bool DownscaleToNative(DSurface* pSource, DSurface* pDestination,
+		DSurface* pSecond = nullptr, const RowSpans* pSpans = nullptr);
 };

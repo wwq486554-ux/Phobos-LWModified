@@ -327,6 +327,56 @@ namespace
 	unsigned int DiagSidebarNativePresents = 0;
 	int DiagSidebarLoggedWidth = 0;
 
+	// Where the per-frame cost of EndTacticalRender goes. The outer window (see
+	// Hooks.ViewZoom.cpp) measures that whole call as segment B; these two split
+	// it into "state put back" and "the image written", which is what decides
+	// whether speeding up the resample is worth anything. Microseconds.
+	struct DiagTiming
+	{
+		unsigned long long Sum;
+		unsigned int Count;
+		unsigned int Max;
+	};
+
+	DiagTiming DiagRestoreTiming { 0, 0, 0 };
+	DiagTiming DiagDownscaleTiming { 0, 0, 0 };
+	unsigned long long DiagQpcFrequency = 0;
+
+	unsigned long long DiagQpcNow()
+	{
+		LARGE_INTEGER value;
+		QueryPerformanceCounter(&value);
+
+		return static_cast<unsigned long long>(value.QuadPart);
+	}
+
+	void DiagRecordTiming(DiagTiming& timing, unsigned long long ticks)
+	{
+		if (!DiagQpcFrequency)
+		{
+			LARGE_INTEGER frequency;
+			QueryPerformanceFrequency(&frequency);
+
+			DiagQpcFrequency = frequency.QuadPart > 0
+				? static_cast<unsigned long long>(frequency.QuadPart)
+				: 1;
+		}
+
+		const unsigned int microseconds =
+			static_cast<unsigned int>(ticks * 1000000ull / DiagQpcFrequency);
+
+		timing.Sum += microseconds;
+		++timing.Count;
+
+		if (microseconds > timing.Max)
+			timing.Max = microseconds;
+	}
+
+	unsigned int DiagTimingAverage(const DiagTiming& timing)
+	{
+		return timing.Count ? static_cast<unsigned int>(timing.Sum / timing.Count) : 0;
+	}
+
 	// Invalidation produced while the enlarged viewport is not installed. The
 	// engine hands the renderer native-viewport geometry there, so the fork has
 	// to correct it: 0x6D2790 rectangles have to move into the enlarged space,
@@ -644,6 +694,24 @@ namespace
 			DiagCellCalls, DiagCellSeen, DiagCellWideOnly, DiagCellEnqueued, DiagCellCapped,
 			DiagBandRestarts, DiagBandPushed, DiagForcedRedraws, DiagFullRedrawInterval);
 
+		// Split of the EndTacticalRender cost the outer window reports as `B`.
+		// `write` now averages over the frames that still needed the resample
+		// plus the skipped ones (which cost nothing), so it is the effective
+		// per-frame price. `skipped` = frames the resample was left out for;
+		// `marked` = frames a producer touched the surface; `fullrepaint` =
+		// frames the engine repainted everything. Between them they say which
+		// condition is blocking the skip.
+		const ViewZoomClass::SkipDiagnostics skip = ViewZoomClass::TakeSkipDiagnostics();
+
+		Debug::Log("[ViewZoom] diag: endrender restore avg %u max %u us (%u frames) | write avg %u max %u us | skipped %u, marked %u, fullrepaint %u | partial %u (avg %u.%u%% of view) frames\n",
+			DiagTimingAverage(DiagRestoreTiming), DiagRestoreTiming.Max, DiagRestoreTiming.Count,
+			DiagTimingAverage(DiagDownscaleTiming), DiagDownscaleTiming.Max,
+			skip.Skipped, skip.Marked, skip.FullRepaint,
+			skip.Partial, skip.PartialAreaPerMille / 10, skip.PartialAreaPerMille % 10);
+
+		DiagRestoreTiming = DiagTiming { 0, 0, 0 };
+		DiagDownscaleTiming = DiagTiming { 0, 0, 0 };
+
 		DiagDirtyAll = 0;
 		DiagForcedRedraws = 0;
 		DiagBandRestarts = 0;
@@ -697,6 +765,28 @@ bool ViewZoomClass::TranslateDirtyAreas = true;
 bool ViewZoomClass::WideCellEnqueue = false;
 bool ViewZoomClass::BandFillOnScroll = false;
 int ViewZoomClass::FullRedrawEvery = 0;
+int ViewZoomClass::MaxStaticSkip = 4;
+
+// Nothing has been drawn into the enlarged surface yet, so the first wide frame
+// always resamples.
+bool ViewZoomClass::FrameContentChanged = true;
+bool ViewZoomClass::FrameFullRepaint = true;
+unsigned int ViewZoomClass::StaticSkipRun = 0;
+int ViewZoomClass::LastDownscaleCamera[2] = { 0, 0 };
+unsigned int ViewZoomClass::DiagSkippedResamples = 0;
+unsigned int ViewZoomClass::DiagMarkedFrames = 0;
+unsigned int ViewZoomClass::DiagFullRepaintFrames = 0;
+
+// No dirty rectangle has been reported for the first frame, which forces the
+// full pass; a resample restores validity.
+unsigned short ViewZoomClass::FrameSpanMinX[MaxSpanRows];
+unsigned short ViewZoomClass::FrameSpanMaxX[MaxSpanRows];
+int ViewZoomClass::FrameSpanFirstRow = 0;
+int ViewZoomClass::FrameSpanLastRow = -1;
+unsigned long long ViewZoomClass::FrameSpanArea = 0;
+bool ViewZoomClass::FrameSpansValid = false;
+unsigned int ViewZoomClass::DiagPartialResamples = 0;
+unsigned int ViewZoomClass::DiagPartialAreaPerMille = 0;
 
 int ViewZoomClass::LevelCount = DefaultLevelCount;
 int ViewZoomClass::CurrentLevel = 4;
@@ -786,6 +876,7 @@ void ViewZoomClass::LoadFromINI(CCINIClass* pINI, const char* pSection)
 	WideCellEnqueue = pINI->ReadBool(pSection, "ViewZoom.WideCellEnqueue", false);
 	BandFillOnScroll = pINI->ReadBool(pSection, "ViewZoom.BandFillOnScroll", false);
 	FullRedrawEvery = pINI->ReadInteger(pSection, "ViewZoom.FullRedrawEvery", 8);
+	MaxStaticSkip = pINI->ReadInteger(pSection, "ViewZoom.MaxStaticSkip", 4);
 	LevelCount = 0;
 
 	for (int i = 0; i < MaxLevels; ++i)
@@ -1278,6 +1369,10 @@ void ViewZoomClass::OnLevelChanged()
 	WideReady = false;
 	WideLevelLive = false;
 
+	// A new level means a new surface: nothing may be skipped from here on.
+	MarkWideFrameContent();
+	StaticSkipRun = 0;
+
 	const double factor = GetFactor();
 
 	if (Enabled && WideView && IsWideLevel(CurrentLevel) && factor > NativeFactor)
@@ -1664,6 +1759,10 @@ void ViewZoomClass::AdvanceBandFill(int budget)
 	if (!BandFillActive)
 		return;
 
+	// The sweep writes cells into the queue itself, so the visible-cell hook
+	// never sees them; it counts as content just the same.
+	MarkWideFrameContent();
+
 	TacticalClass* pTactical = TacticalClass::Instance;
 
 	if (!pTactical)
@@ -1908,7 +2007,142 @@ bool ViewZoomClass::FillNativeView(DSurface* pSurface)
 	return true;
 }
 
-bool ViewZoomClass::DownscaleToNative(DSurface* pSource, DSurface* pDestination)
+// One destination row of the nearest-neighbour downscale, straight from the
+// phase recurrence. This is the reference implementation: it is kept as the
+// fallback for the (never used) case where the enlarged frame is not actually
+// wider than the native view, so the periodic form below only ever replaces it
+// where the invariants hold.
+template <bool SecondDestination>
+void EmitDownscaledRowScalar(const unsigned short* pSourceRow, int bigWidth,
+	unsigned short* pDestinationRow, [[maybe_unused]] unsigned short* pSecondRow,
+	int width, int firstX, int endX)
+{
+	// Same recurrence, started from the closed form for `firstX`:
+	// sourceX(x) = floor(x * bigWidth / width).
+	const long long start = static_cast<long long>(firstX) * bigWidth;
+
+	int sourceX = static_cast<int>(start / width);
+	int horizontalPhase = static_cast<int>(start % width);
+
+	for (int destX = firstX; destX < endX; ++destX)
+	{
+		if (sourceX >= bigWidth)
+			sourceX = bigWidth - 1;
+
+		const unsigned short pixel = pSourceRow[sourceX];
+
+		pDestinationRow[destX] = pixel;
+
+		if constexpr (SecondDestination)
+			pSecondRow[destX] = pixel;
+
+		horizontalPhase += bigWidth;
+
+		while (horizontalPhase >= width)
+		{
+			horizontalPhase -= width;
+			++sourceX;
+		}
+	}
+}
+
+// The same row, using the closed form of that recurrence. Destination pixel d
+// reads source pixel
+//
+//     sourceX(d) = floor(d * bigWidth / width)
+//
+// which is periodic: with g = gcd(bigWidth, width), q = width / g and
+// p = bigWidth / g, sourceX(d + i) == sourceX(d) + i * p for every i < q. So the
+// offsets of one block are a table, a block hands over to the next with a single
+// add, and the per-pixel phase chain and its branch disappear.
+//
+// Precondition: the table is contiguous (pOffsets[i] == i), which is what lets a
+// whole block be fetched with one wide load and stored with one wide store
+// instead of one 16-bit store per pixel. The caller selects this form only when
+// that holds. Measured on the levels in use: at k = 1.25 (block 4) it makes the
+// pass 35% faster; where the source pixels of a block are strided (k = 2 and
+// 2.5) the packed form is a wash or slightly slower than the scalar recurrence,
+// so those levels stay on the scalar path.
+template <bool SecondDestination>
+void EmitDownscaledRowPeriodic(const unsigned short* pSourceRow, int width,
+	const int* pOffsets, int unit, int sourceStep,
+	unsigned short* pDestinationRow, [[maybe_unused]] unsigned short* pSecondRow,
+	int firstX, int endX)
+{
+	// The block grid is anchored at destination pixel 0, so a sub-range is
+	// widened to whole blocks. The pixels that adds lie outside the requested
+	// range but follow from the same mapping, so they are exactly what a full
+	// pass would have written there.
+	const int startX = (firstX / unit) * unit;
+	const int snapped = ((endX + unit - 1) / unit) * unit;
+	const int stopX = snapped < width ? snapped : width;
+
+	int destinationX = startX;
+	int sourceBase = (startX / unit) * sourceStep;
+
+	if ((unit & 3) == 0)
+	{
+		while (destinationX + unit <= stopX)
+		{
+			const unsigned short* pSource = pSourceRow + sourceBase;
+			int x = destinationX;
+
+			for (int i = 0; i < unit; i += 4)
+			{
+				const unsigned long long pixels =
+					*reinterpret_cast<const unsigned long long*>(pSource + pOffsets[i]);
+
+				*reinterpret_cast<unsigned long long*>(pDestinationRow + x) = pixels;
+
+				if constexpr (SecondDestination)
+					*reinterpret_cast<unsigned long long*>(pSecondRow + x) = pixels;
+
+				x += 4;
+			}
+
+			destinationX += unit;
+			sourceBase += sourceStep;
+		}
+	}
+	else
+	{
+		while (destinationX + unit <= stopX)
+		{
+			const unsigned short* pSource = pSourceRow + sourceBase;
+			int x = destinationX;
+
+			for (int i = 0; i < unit; i += 2)
+			{
+				const unsigned int pixels =
+					*reinterpret_cast<const unsigned int*>(pSource + pOffsets[i]);
+
+				*reinterpret_cast<unsigned int*>(pDestinationRow + x) = pixels;
+
+				if constexpr (SecondDestination)
+					*reinterpret_cast<unsigned int*>(pSecondRow + x) = pixels;
+
+				x += 2;
+			}
+
+			destinationX += unit;
+			sourceBase += sourceStep;
+		}
+	}
+
+	// Fewer than one block left, straight from the same table.
+	for (int i = 0; destinationX < endX; ++destinationX, ++i)
+	{
+		const unsigned short pixel = pSourceRow[sourceBase + pOffsets[i]];
+
+		pDestinationRow[destinationX] = pixel;
+
+		if constexpr (SecondDestination)
+			pSecondRow[destinationX] = pixel;
+	}
+}
+
+bool ViewZoomClass::DownscaleToNative(DSurface* pSource, DSurface* pDestination,
+	DSurface* pSecond, const RowSpans* pSpans)
 {
 	if (!pSource || !pDestination || BigWidth < 2 || BigHeight < 2)
 		return false;
@@ -1920,6 +2154,28 @@ bool ViewZoomClass::DownscaleToNative(DSurface* pSource, DSurface* pDestination)
 
 	if (view.Width < 2 || view.Height < 2)
 		return false;
+
+	// Which rows this call has to produce, and the column range of each. Without
+	// spans the whole view is produced. Everything is indexed relative to the
+	// view rectangle (row 0 = its first row), which is what the phase state and
+	// the row emitters expect.
+	int firstRow = 0;
+	int endRow = view.Height;
+
+	if (pSpans)
+	{
+		if (!pSpans->pMinX || !pSpans->pMaxX || pSpans->LastRow < pSpans->FirstRow)
+			return false;
+
+		firstRow = pSpans->FirstRow < 0 ? 0 : pSpans->FirstRow;
+
+		const int last = pSpans->LastRow >= view.Height ? view.Height - 1 : pSpans->LastRow;
+
+		if (last < firstRow)
+			return false;
+
+		endRow = last + 1;
+	}
 
 	if (pSource->GetBytesPerPixel() != RequiredBytesPerPixel
 		|| pDestination->GetBytesPerPixel() != RequiredBytesPerPixel)
@@ -1954,10 +2210,83 @@ bool ViewZoomClass::DownscaleToNative(DSurface* pSource, DSurface* pDestination)
 		return false;
 	}
 
+	// The second native surface takes the same image. It has to accept the same
+	// destination rectangle; if anything about it does not fit, it is left alone
+	// rather than written with a wrong pitch (the caller still has the primary
+	// destination, and the levels that need the pair always match).
+	unsigned char* pSecondPixels = nullptr;
+	int secondPitch = 0;
+
+	if (pSecond && pSecond != pDestination
+		&& pSecond->GetBytesPerPixel() == RequiredBytesPerPixel)
+	{
+		const int pitch = pSecond->GetPitch();
+
+		if (pitch > 0 && view.X >= 0 && view.Y >= 0
+			&& view.X + view.Width <= pSecond->Width
+			&& view.Y + view.Height <= pSecond->Height)
+		{
+			pSecondPixels = static_cast<unsigned char*>(pSecond->Lock(0, 0));
+
+			if (pSecondPixels)
+				secondPitch = pitch;
+		}
+	}
+
 	if (Diagnostics)
 	{
 		SampleRegion(pSourcePixels, sourcePitch, { 0, 0, BigWidth, BigHeight },
 			SampleStep, SampleStep, DiagSourceNonBlack, DiagSourceSamples);
+	}
+
+	// Source offsets of one horizontal block, when the periodic form applies.
+	// The used levels give unit 4 (k = 1.25) or 2 (k = 1.5 / 2 / 2.5); anything
+	// larger than this falls back to the scalar recurrence rather than putting a
+	// wide table on the stack.
+	//
+	// The packed form is only taken when the offsets are contiguous. Where they
+	// are not (k = 2 / 2.5 read every other source pixel) the scalar recurrence
+	// measured the same or slightly faster, so those levels keep it.
+	constexpr int MaxPeriodUnit = 64;
+	int periodOffsets[MaxPeriodUnit];
+	int periodUnit = 0;
+	int periodStep = 0;
+
+	if (view.Width <= BigWidth && view.Height <= BigHeight)
+	{
+		int a = BigWidth;
+		int b = view.Width;
+
+		while (b)
+		{
+			const int remainder = a % b;
+			a = b;
+			b = remainder;
+		}
+
+		const int period = a > 0 ? view.Width / a : 0;
+
+		if (period > 0 && period <= MaxPeriodUnit / 2)
+		{
+			const int unit = (period & 1) ? period * 2 : period;
+			bool contiguous = true;
+
+			for (int i = 0; i < unit; ++i)
+			{
+				periodOffsets[i] = static_cast<int>(
+					static_cast<long long>(i) * BigWidth / view.Width);
+
+				if (periodOffsets[i] != i)
+					contiguous = false;
+			}
+
+			if (contiguous)
+			{
+				periodUnit = unit;
+				periodStep = static_cast<int>(
+					static_cast<long long>(unit) * BigWidth / view.Width);
+			}
+		}
 	}
 
 	// Nearest neighbour from the enlarged frame down to the presented rectangle.
@@ -1971,35 +2300,92 @@ bool ViewZoomClass::DownscaleToNative(DSurface* pSource, DSurface* pDestination)
 	// left corner of the enlarged frame. (The magnify path further down may use
 	// an `if` because there the source is the smaller one, so the ratio is below
 	// one and one subtraction per step is always enough.)
+	//
+	// Whenever the periodic form applies (always, for the levels that exist
+	// today) the row is emitted from the block table instead; both produce the
+	// same pixels.
+	// The phase state starts from the first row that is produced, and advances
+	// once per row whether or not that row has a range. Accumulator invariant:
+	// sourceY(row) = floor(row * BigHeight / view.Height),
+	// verticalPhase(row) = (row * BigHeight) % view.Height.
 	int sourceY = 0;
 	int verticalPhase = 0;
 
-	for (int destY = 0; destY < view.Height; ++destY)
+	if (firstRow > 0)
+	{
+		const long long start = static_cast<long long>(firstRow) * BigHeight;
+
+		sourceY = static_cast<int>(start / view.Height);
+		verticalPhase = static_cast<int>(start % view.Height);
+	}
+
+	for (int row = firstRow; row < endRow; ++row)
 	{
 		if (sourceY >= BigHeight)
 			sourceY = BigHeight - 1;
 
+		int firstX = 0;
+		int endX = view.Width;
+
+		if (pSpans)
+		{
+			const int spanLeft = pSpans->pMinX[row];
+			const int spanRight = pSpans->pMaxX[row];
+
+			// The phase has to advance for this row either way, so an empty row
+			// only skips the emission below.
+			if (spanRight > spanLeft)
+			{
+				firstX = spanLeft;
+				endX = spanRight > view.Width ? view.Width : spanRight;
+			}
+			else
+			{
+				verticalPhase += BigHeight;
+
+				while (verticalPhase >= view.Height)
+				{
+					verticalPhase -= view.Height;
+					++sourceY;
+				}
+
+				continue;
+			}
+		}
+
 		const unsigned short* pSourceRow = reinterpret_cast<const unsigned short*>(
 			pSourcePixels + sourceY * sourcePitch);
 		unsigned short* pDestinationRow = reinterpret_cast<unsigned short*>(
-			pDestPixels + (view.Y + destY) * destPitch + view.X * 2);
-		int sourceX = 0;
-		int horizontalPhase = 0;
+			pDestPixels + (view.Y + row) * destPitch + view.X * 2);
+		unsigned short* pSecondRow = pSecondPixels
+			? reinterpret_cast<unsigned short*>(
+				pSecondPixels + (view.Y + row) * secondPitch + view.X * 2)
+			: nullptr;
 
-		for (int destX = 0; destX < view.Width; ++destX)
+		if (periodUnit)
 		{
-			if (sourceX >= BigWidth)
-				sourceX = BigWidth - 1;
-
-			pDestinationRow[destX] = pSourceRow[sourceX];
-
-			horizontalPhase += BigWidth;
-
-			while (horizontalPhase >= view.Width)
+			if (pSecondRow)
 			{
-				horizontalPhase -= view.Width;
-				++sourceX;
+				EmitDownscaledRowPeriodic<true>(pSourceRow, view.Width,
+					periodOffsets, periodUnit, periodStep,
+					pDestinationRow, pSecondRow, firstX, endX);
 			}
+			else
+			{
+				EmitDownscaledRowPeriodic<false>(pSourceRow, view.Width,
+					periodOffsets, periodUnit, periodStep,
+					pDestinationRow, nullptr, firstX, endX);
+			}
+		}
+		else if (pSecondRow)
+		{
+			EmitDownscaledRowScalar<true>(pSourceRow, BigWidth,
+				pDestinationRow, pSecondRow, view.Width, firstX, endX);
+		}
+		else
+		{
+			EmitDownscaledRowScalar<false>(pSourceRow, BigWidth,
+				pDestinationRow, nullptr, view.Width, firstX, endX);
 		}
 
 		verticalPhase += BigHeight;
@@ -2016,6 +2402,9 @@ bool ViewZoomClass::DownscaleToNative(DSurface* pSource, DSurface* pDestination)
 		SampleRegion(pDestPixels, destPitch, view, SampleStep, SampleStep,
 			DiagDestNonBlack, DiagDestSamples);
 	}
+
+	if (pSecondPixels)
+		pSecond->Unlock();
 
 	pDestination->Unlock();
 	pSource->Unlock();
@@ -2107,6 +2496,136 @@ bool ViewZoomClass::ShouldForceFullRedraw()
 // left there (0x6D3FCF), and it never heals on its own. Moving the rectangle
 // here is the only place where the correction can be made: by the time the
 // layers consume it, the original origin is gone.
+// Called by every producer of enlarged-surface content: dirty-area registration
+// (004F44AF's counterpart at 0x6D2790), visible-cell enqueue (0x6DA938), the
+// banded fill, and anything that rebuilds the surface pair. The flag is cleared
+// only when a resample actually runs, so a producer that fires between two
+// skipped frames keeps the next frame dirty.
+// A change whose rectangle is known, in enlarged-surface coordinates. It is
+// mapped onto the destination rows it can affect and widens their column ranges;
+// those ranges are what the partial resample replays.
+void ViewZoomClass::MarkWideFrameRect(const RectangleStruct& enlargedRect)
+{
+	if (!FrameContentChanged)
+		++DiagMarkedFrames;
+
+	FrameContentChanged = true;
+
+	if (!FrameSpansValid || WideDestRect.Width < 2 || WideDestRect.Height < 2
+		|| BigWidth < 2 || BigHeight < 2
+		|| WideDestRect.Height > MaxSpanRows)
+	{
+		return;
+	}
+
+	const long long scaleX = WideDestRect.Width;
+	const long long scaleY = WideDestRect.Height;
+
+	// One pixel of margin on each side: the nearest-neighbour mapping reaches
+	// the rows and columns next to the exact projection.
+	int left = static_cast<int>(static_cast<long long>(enlargedRect.X) * scaleX / BigWidth) - 1;
+	int right = static_cast<int>(static_cast<long long>(enlargedRect.X + enlargedRect.Width)
+		* scaleX / BigWidth) + 2;
+	int top = static_cast<int>(static_cast<long long>(enlargedRect.Y) * scaleY / BigHeight) - 1;
+	int bottom = static_cast<int>(static_cast<long long>(enlargedRect.Y + enlargedRect.Height)
+		* scaleY / BigHeight) + 2;
+
+	if (left < 0) left = 0;
+	if (top < 0) top = 0;
+	if (right > WideDestRect.Width) right = WideDestRect.Width;
+	if (bottom > WideDestRect.Height) bottom = WideDestRect.Height;
+
+	if (right <= left || bottom <= top)
+		return;
+
+	const unsigned short spanLeft = static_cast<unsigned short>(left);
+	const unsigned short spanRight = static_cast<unsigned short>(right);
+
+	for (int row = top; row < bottom; ++row)
+	{
+		if (FrameSpanMaxX[row] <= FrameSpanMinX[row])
+		{
+			FrameSpanMinX[row] = spanLeft;
+			FrameSpanMaxX[row] = spanRight;
+			FrameSpanArea += static_cast<unsigned long long>(right - left);
+		}
+		else
+		{
+			// Widening an existing range: the area has to follow, otherwise the
+			// threshold below sees a set smaller than it is.
+			const int previous = FrameSpanMaxX[row] - FrameSpanMinX[row];
+			int newLeft = FrameSpanMinX[row] < spanLeft ? FrameSpanMinX[row] : spanLeft;
+			int newRight = FrameSpanMaxX[row] > spanRight ? FrameSpanMaxX[row] : spanRight;
+
+			FrameSpanMinX[row] = static_cast<unsigned short>(newLeft);
+			FrameSpanMaxX[row] = static_cast<unsigned short>(newRight);
+			FrameSpanArea += static_cast<unsigned long long>(newRight - newLeft - previous);
+		}
+
+		if (row < FrameSpanFirstRow)
+			FrameSpanFirstRow = row;
+
+		if (row > FrameSpanLastRow)
+			FrameSpanLastRow = row;
+	}
+}
+
+// A cell was queued: the frame is dirty, but the producer did not say where.
+// The ranges collected so far stay usable; a cell drawn outside all of them is
+// caught by the periodic full repaint.
+void ViewZoomClass::NoteFrameCellEnqueued()
+{
+	if (!FrameContentChanged)
+		++DiagMarkedFrames;
+
+	FrameContentChanged = true;
+}
+
+// A change with no rectangle at all (band fill, surface pair rebuilt, level
+// change): the next resample has to cover the whole view.
+void ViewZoomClass::MarkWideFrameContent()
+{
+	if (!FrameContentChanged)
+		++DiagMarkedFrames;
+
+	FrameContentChanged = true;
+	FrameSpansValid = false;
+}
+
+// 004F44AF reads the tactical redraw mode into EAX and clears it; a non-zero
+// value means the engine repaints the whole viewport this frame (level change,
+// surface rebuild), which no invalidation counter would show. 004F44A5 loads it
+// from DisplayClass + 0x0C and 004F44A8 clears the field, so the value read here
+// is exactly the mode this frame runs with.
+void ViewZoomClass::NoteFrameRedrawMode(bool fullRepaint)
+{
+	if (fullRepaint)
+		++DiagFullRepaintFrames;
+
+	FrameFullRepaint = fullRepaint;
+}
+
+ViewZoomClass::SkipDiagnostics ViewZoomClass::TakeSkipDiagnostics()
+{
+	SkipDiagnostics diagnostics;
+
+	diagnostics.Skipped = DiagSkippedResamples;
+	diagnostics.Marked = DiagMarkedFrames;
+	diagnostics.FullRepaint = DiagFullRepaintFrames;
+	diagnostics.Partial = DiagPartialResamples;
+	diagnostics.PartialAreaPerMille = DiagPartialResamples
+		? DiagPartialAreaPerMille / DiagPartialResamples
+		: 0;
+
+	DiagSkippedResamples = 0;
+	DiagMarkedFrames = 0;
+	DiagFullRepaintFrames = 0;
+	DiagPartialResamples = 0;
+	DiagPartialAreaPerMille = 0;
+
+	return diagnostics;
+}
+
 void ViewZoomClass::TranslateDirtyArea(RectangleStruct& area)
 {
 	const bool wide = WideLevelLive && WantsWideView();
@@ -2122,6 +2641,8 @@ void ViewZoomClass::TranslateDirtyArea(RectangleStruct& area)
 		// Produced while the enlarged viewport is live: already in the enlarged
 		// space (this is the object and animation draw path, which runs in the
 		// object pass after the present). Nothing to move -- only measure.
+		MarkWideFrameRect(area);
+
 		if (Diagnostics)
 		{
 			++DiagDirtyInWindow;
@@ -2144,43 +2665,50 @@ void ViewZoomClass::TranslateDirtyArea(RectangleStruct& area)
 	if (Diagnostics)
 		++DiagDirtySeen;
 
-	if (!TranslateDirtyAreas)
+	if (!TranslateDirtyAreas || BigWidth < 2 || BigHeight < 2)
+	{
+		MarkWideFrameContent();
 		return;
-
-	if (BigWidth < 2 || BigHeight < 2)
-		return;
+	}
 
 	// Outside the render window this is the native rectangle, which is what the
 	// producer measured against.
 	const auto& native = DSurface::ViewBounds;
 
 	if (native.Width < 2 || native.Height < 2)
+	{
+		MarkWideFrameContent();
 		return;
+	}
 
 	const int shiftX = (BigWidth - native.Width) / 2;
 	const int shiftY = (BigHeight - native.Height) / 2;
 
-	if (shiftX <= 0 && shiftY <= 0)
-		return;
-
-	area.X += shiftX;
-	area.Y += shiftY;
-
-	if (Diagnostics)
+	if (shiftX > 0 || shiftY > 0)
 	{
-		++DiagDirtyCorrected;
+		area.X += shiftX;
+		area.Y += shiftY;
 
-		if (DiagDirtySamples < 4)
+		if (Diagnostics)
 		{
-			++DiagDirtySamples;
+			++DiagDirtyCorrected;
 
-			Debug::Log("[ViewZoom] dirty rect moved %+d,%+d: %d,%d %dx%d -> %d,%d | native view %dx%d big %dx%d\n",
-				shiftX, shiftY,
-				area.X - shiftX, area.Y - shiftY, area.Width, area.Height,
-				area.X, area.Y,
-				native.Width, native.Height, BigWidth, BigHeight);
+			if (DiagDirtySamples < 4)
+			{
+				++DiagDirtySamples;
+
+				Debug::Log("[ViewZoom] dirty rect moved %+d,%+d: %d,%d %dx%d -> %d,%d | native view %dx%d big %dx%d\n",
+					shiftX, shiftY,
+					area.X - shiftX, area.Y - shiftY, area.Width, area.Height,
+					area.X, area.Y,
+					native.Width, native.Height, BigWidth, BigHeight);
+			}
 		}
 	}
+
+	// The rectangle now describes the enlarged surface, which is what the
+	// partial resample maps from.
+	MarkWideFrameRect(area);
 }
 
 // TacticalClass::RegisterCellAsVisible (0x6DA7D0) is the only writer of the
@@ -2510,6 +3038,11 @@ void ViewZoomClass::InstallWideRender()
 		//
 		const bool keepClampedCamera = false;
 
+		// A pair that had to be built (or rebuilt) holds no valid frame, so this
+		// is content: the whole install body runs again on every frame, which is
+		// why the mark sits here and not at the top of the function.
+		MarkWideFrameContent();
+
 		SeedBigSurfaces(pSavedComposite);
 
 		ApplyTacticalViewport(big);
@@ -2574,6 +3107,23 @@ void ViewZoomClass::InstallWideRender()
 	LogGeometry("install");
 }
 
+// The camera centre the renderer is currently working with (TacticalClass
+// +0xD74/+0xD78). Used to tell a genuinely static frame from one that panned.
+bool GetTacticalCamera(int& cameraX, int& cameraY)
+{
+	TacticalClass* pTactical = TacticalClass::Instance;
+
+	if (!pTactical)
+		return false;
+
+	const unsigned char* pBytes = reinterpret_cast<const unsigned char*>(pTactical);
+
+	cameraX = *reinterpret_cast<const int*>(pBytes + CameraXOffset);
+	cameraY = *reinterpret_cast<const int*>(pBytes + CameraYOffset);
+
+	return true;
+}
+
 void ViewZoomClass::EndTacticalRender()
 {
 	// Close the frame timing first: the tactical passes have just finished.
@@ -2590,6 +3140,11 @@ void ViewZoomClass::EndTacticalRender()
 
 		FrameWasForced = false;
 	}
+
+	// Where the rest of this call goes: engine state put back, then the image
+	// written. Reported with the other diagnostics (see ReportDiagnostics).
+	const bool sectionTiming = Diagnostics;
+	const unsigned long long sectionTimingStart = sectionTiming ? DiagQpcNow() : 0;
 
 	// Safety net: the sidebar swap must never survive the frame.
 	if (SidebarViewActive)
@@ -2665,32 +3220,139 @@ void ViewZoomClass::EndTacticalRender()
 
 	WideInstalled = false;
 
-	if (pSource && pDestination && DebugFill)
+	// Split the rest of the call: everything up to here is engine state put
+	// back into place, everything after is the image being written.
+	const unsigned long long writeStart = sectionTiming ? DiagQpcNow() : 0;
+
+	// While a wide level is active the engine renders into the enlarged pair
+	// only, so both native surfaces are free to hold the finished frame. Keeping
+	// them identical means the presentation shows the same image whichever of
+	// the two (or Temp) it reads.
+	//
+	// They are filled by one pass, not two: the second surface used to get its
+	// own full resample, which doubled this section (measured at k = 1.25:
+	// 2.7 ms of a 4.5 ms frame) for a byte-identical result.
+	DSurface* pOther = (pDestination == pSavedComposite) ? pSavedTile : pSavedComposite;
+
+	if (sectionTiming)
 	{
-		DSurface* pOther = (pDestination == pSavedComposite) ? pSavedTile : pSavedComposite;
-
-		WideReady = FillNativeView(pDestination);
-
-		if (pOther && pOther != pDestination)
-			FillNativeView(pOther);
-
-		++DiagDownscaleOk;
+		const unsigned long long restoreEnd = DiagQpcNow();
+		DiagRecordTiming(DiagRestoreTiming, restoreEnd - sectionTimingStart);
 	}
-	else if (pSource && pDestination)
+
+	// Nothing has drawn into the enlarged surface since the last resample and the
+	// camera has not moved, so the native pair still holds exactly what a resample
+	// would produce. Skipping is worth more than any micro-optimisation of the
+	// loop: measured at k = 1.25, invalidations arrive 4-72 times per five
+	// seconds while the renderer runs hundreds of frames in that window.
+	bool canSkip = false;
+
+	if (MaxStaticSkip > 0 && pSource && pDestination
+		&& WideLevelLive && WideReady && WantsWideView()
+		&& !FrameFullRepaint && !FrameContentChanged
+		&& StaticSkipRun < static_cast<unsigned int>(MaxStaticSkip))
 	{
-		WideReady = DownscaleToNative(pSource, pDestination);
+		int cameraX = 0;
+		int cameraY = 0;
 
-		// While a wide level is active the engine renders into the enlarged
-		// pair only, so both native surfaces are free to hold the finished
-		// frame. Keeping them identical means the presentation shows the same
-		// image whichever of the two (or Temp) it reads.
-		DSurface* pOther = (pDestination == pSavedComposite) ? pSavedTile : pSavedComposite;
-
-		if (pOther && pOther != pDestination)
-			DownscaleToNative(pSource, pOther);
-
-		WideReady ? ++DiagDownscaleOk : ++DiagDownscaleFail;
+		canSkip = GetTacticalCamera(cameraX, cameraY)
+			&& cameraX == LastDownscaleCamera[0]
+			&& cameraY == LastDownscaleCamera[1];
 	}
+
+	bool resampled = false;
+
+	if (!canSkip)
+	{
+		if (pSource && pDestination && DebugFill)
+		{
+			WideReady = FillNativeView(pDestination);
+
+			if (pOther && pOther != pDestination)
+				FillNativeView(pOther);
+
+			++DiagDownscaleOk;
+			resampled = true;
+		}
+		else if (pSource && pDestination)
+		{
+			// Only the column ranges the frame actually changed have to be
+			// produced. The ranges are collected per destination row while the
+			// producers report, so scattered rectangles stay scattered instead of
+			// collapsing into one bounding box. Anything that changed without a
+			// rectangle (band fill, rebuilt pair, a whole-viewport repaint)
+			// invalidates them, and a set that covers most of the view falls back
+			// to the full pass rather than paying for a scatter of small ones.
+			constexpr int PartialAreaPercent = 60;
+			ViewZoomClass::RowSpans spans;
+			const ViewZoomClass::RowSpans* pSpans = nullptr;
+
+			if (!FrameFullRepaint && FrameSpansValid
+				&& FrameSpanLastRow >= FrameSpanFirstRow
+				&& WideDestRect.Width > 0 && WideDestRect.Height > 0)
+			{
+				const unsigned long long full = static_cast<unsigned long long>(
+					WideDestRect.Width) * WideDestRect.Height;
+
+				if (FrameSpanArea * 100 <= full * PartialAreaPercent)
+				{
+					spans.pMinX = FrameSpanMinX;
+					spans.pMaxX = FrameSpanMaxX;
+					spans.FirstRow = FrameSpanFirstRow;
+					spans.LastRow = FrameSpanLastRow;
+					pSpans = &spans;
+
+					++DiagPartialResamples;
+					DiagPartialAreaPerMille += static_cast<unsigned int>(
+						FrameSpanArea * 1000 / (full > 0 ? full : 1));
+				}
+			}
+
+			WideReady = DownscaleToNative(pSource, pDestination, pOther, pSpans);
+
+			WideReady ? ++DiagDownscaleOk : ++DiagDownscaleFail;
+			resampled = true;
+		}
+	}
+
+	if (resampled)
+	{
+		StaticSkipRun = 0;
+
+		// Cleared only by a resample: a producer that fires after this hook then
+		// keeps the next frame dirty instead of being lost. The collected ranges
+		// are consumed with it.
+		FrameContentChanged = false;
+		FrameSpansValid = true;
+		FrameSpanArea = 0;
+
+		for (int row = FrameSpanFirstRow; row <= FrameSpanLastRow
+			&& row < MaxSpanRows; ++row)
+		{
+			FrameSpanMinX[row] = 0;
+			FrameSpanMaxX[row] = 0;
+		}
+
+		FrameSpanFirstRow = 0;
+		FrameSpanLastRow = -1;
+
+		int cameraX = 0;
+		int cameraY = 0;
+
+		if (GetTacticalCamera(cameraX, cameraY))
+		{
+			LastDownscaleCamera[0] = cameraX;
+			LastDownscaleCamera[1] = cameraY;
+		}
+	}
+	else if (canSkip)
+	{
+		++StaticSkipRun;
+		++DiagSkippedResamples;
+	}
+
+	if (sectionTiming)
+		DiagRecordTiming(DiagDownscaleTiming, DiagQpcNow() - writeStart);
 
 	if (Diagnostics)
 		ReportDiagnostics();

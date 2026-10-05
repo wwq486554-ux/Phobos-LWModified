@@ -2,6 +2,8 @@
 #include <Misc/ViewZoom.h>
 #include <Utilities/Debug.h>
 
+#include <algorithm>
+
 #include <Helpers/Macro.h>
 #include <Surface.h>
 #include <TacticalClass.h>
@@ -172,8 +174,219 @@ namespace ViewZoomDiag
 			static_cast<void*>(TacticalClass::Instance), reinterpret_cast<void*>(0x87F7E8u));
 	}
 
+	// ---- T6: per-segment frame timing (ViewZoom.Diagnostics) ----
+	//
+	// `render avg/peak` above is a single number for the whole window
+	// 004F44CB..004F451B, which mixes the engine's three passes with our own
+	// EndTacticalRender(). That number cannot say which of the two to attack, so
+	// the same frames are sampled again per segment, in microseconds taken from
+	// QueryPerformanceCounter (GetTickCount resolves to a whole millisecond,
+	// which is the same order as the values being compared):
+	//
+	//   install   InstallWideRender()                  (004F44CB, before the frame)
+	//   A         the engine's three passes            (frame start .. 004F451B)
+	//   B         EndTacticalRender()                  (004F451B: downscale + restore)
+	//   total     A + B
+	//   C         the whole 004F44AF hook, and RestoreNativeFrame() inside it
+	//
+	// Frames that had to force a full redraw (ShouldForceFullRedraw, i.e.
+	// ViewZoom.FullRedrawEvery) are accounted separately as well: they are the
+	// p99 spike, and mixing them into the average hides it.
+	constexpr int SegmentSamples = 4096;
+
+	enum SampleChannel
+	{
+		SmpTotal,
+		SmpA,
+		SmpB,
+		SmpCount
+	};
+
+	enum MeanChannel
+	{
+		MnPre,
+		MnRestore,
+		MnInstall,
+		MnForcedA,
+		MnForcedB,
+		MnForcedTotal,
+		MnClearA,
+		MnClearB,
+		MnClearTotal,
+		MnCount
+	};
+
+	struct SegmentMean
+	{
+		unsigned long long Sum;
+		unsigned int Count;
+		unsigned int Max;
+	};
+
+	unsigned int SegSamples[SmpCount][SegmentSamples];
+	unsigned int SegCounts[SmpCount];
+	unsigned int SegOverflow = 0;
+	SegmentMean SegMeans[MnCount];
+	unsigned int SegForcedFrames = 0;
+
+	// A frame is sampled between 004F44CB (after the install) and 004F451B
+	// (after EndTacticalRender). 004F44AF runs first and hands the forced-redraw
+	// flag over through PendingForcedFrame.
+	unsigned long long QpcFrameStart = 0;
+	unsigned long long QpcFrequency = 0;
+	bool SegPending = false;
+	bool SegFrameForced = false;
+	bool PendingForcedFrame = false;
+
+	inline unsigned long long QpcNow()
+	{
+		LARGE_INTEGER value;
+		QueryPerformanceCounter(&value);
+
+		return static_cast<unsigned long long>(value.QuadPart);
+	}
+
+	inline unsigned int QpcToMicroseconds(unsigned long long ticks)
+	{
+		if (!QpcFrequency)
+		{
+			LARGE_INTEGER frequency;
+			QueryPerformanceFrequency(&frequency);
+
+			QpcFrequency = frequency.QuadPart > 0
+				? static_cast<unsigned long long>(frequency.QuadPart)
+				: 1;
+		}
+
+		return static_cast<unsigned int>(ticks * 1000000ull / QpcFrequency);
+	}
+
+	inline void RecordSample(SampleChannel channel, unsigned long long ticks)
+	{
+		if (SegCounts[channel] < static_cast<unsigned int>(SegmentSamples))
+			SegSamples[channel][SegCounts[channel]] = QpcToMicroseconds(ticks);
+		else
+			++SegOverflow;
+
+		++SegCounts[channel];
+	}
+
+	inline void RecordMean(MeanChannel channel, unsigned long long ticks)
+	{
+		const unsigned int microseconds = QpcToMicroseconds(ticks);
+		SegmentMean& mean = SegMeans[channel];
+
+		mean.Sum += microseconds;
+		++mean.Count;
+
+		if (microseconds > mean.Max)
+			mean.Max = microseconds;
+	}
+
+	// RestoreNativeFrame() sits inside the short-circuit chain of 004F44AF, so it
+	// is wrapped rather than moved: the chain keeps its exact evaluation order.
+	static bool TimeRestoreNativeFrame()
+	{
+		if (!Enabled())
+			return ViewZoomClass::RestoreNativeFrame();
+
+		const unsigned long long start = QpcNow();
+		const bool restored = ViewZoomClass::RestoreNativeFrame();
+
+		RecordMean(MnRestore, QpcNow() - start);
+
+		return restored;
+	}
+
+	static unsigned int ChannelCount(SampleChannel channel)
+	{
+		const unsigned int count = SegCounts[channel];
+
+		return count > static_cast<unsigned int>(SegmentSamples)
+			? static_cast<unsigned int>(SegmentSamples)
+			: count;
+	}
+
+	static void SortChannel(SampleChannel channel)
+	{
+		const unsigned int count = ChannelCount(channel);
+
+		if (count > 1)
+			std::sort(SegSamples[channel], SegSamples[channel] + count);
+	}
+
+	static unsigned int ChannelAt(SampleChannel channel, double fraction)
+	{
+		const unsigned int count = ChannelCount(channel);
+
+		if (!count)
+			return 0;
+
+		unsigned int index = static_cast<unsigned int>(fraction * (count - 1) + 0.5);
+
+		if (index >= count)
+			index = count - 1;
+
+		return SegSamples[channel][index];
+	}
+
+	static unsigned int ChannelAverage(MeanChannel channel)
+	{
+		const SegmentMean& mean = SegMeans[channel];
+
+		return mean.Count ? static_cast<unsigned int>(mean.Sum / mean.Count) : 0;
+	}
+
+	static void ResetSegments()
+	{
+		for (int channel = 0; channel < SmpCount; ++channel)
+			SegCounts[channel] = 0;
+
+		for (int channel = 0; channel < MnCount; ++channel)
+			SegMeans[channel] = SegmentMean { 0, 0, 0 };
+
+		SegOverflow = 0;
+		SegForcedFrames = 0;
+		SegPending = false;
+		SegFrameForced = false;
+	}
+
+	static void ReportSegments()
+	{
+		if (!SegCounts[SmpTotal])
+		{
+			ResetSegments();
+			return;
+		}
+
+		for (int channel = 0; channel < SmpCount; ++channel)
+			SortChannel(static_cast<SampleChannel>(channel));
+
+		Debug::Log("[ViewZoom] seg us: frames %u (stored %u, overflow %u) | total p50 %u p95 %u p99 %u | A engine p50 %u p95 %u p99 %u\n",
+			SegCounts[SmpTotal], ChannelCount(SmpTotal), SegOverflow,
+			ChannelAt(SmpTotal, 0.50), ChannelAt(SmpTotal, 0.95), ChannelAt(SmpTotal, 0.99),
+			ChannelAt(SmpA, 0.50), ChannelAt(SmpA, 0.95), ChannelAt(SmpA, 0.99));
+
+		Debug::Log("[ViewZoom] seg us: B endrender p50 %u p95 %u p99 %u | C prehook avg %u max %u | C restore avg %u max %u | install avg %u max %u\n",
+			ChannelAt(SmpB, 0.50), ChannelAt(SmpB, 0.95), ChannelAt(SmpB, 0.99),
+			ChannelAverage(MnPre), SegMeans[MnPre].Max,
+			ChannelAverage(MnRestore), SegMeans[MnRestore].Max,
+			ChannelAverage(MnInstall), SegMeans[MnInstall].Max);
+
+		Debug::Log("[ViewZoom] seg us: forced %u frames | without D: n %u A %u B %u total %u max %u | with D: n %u A %u B %u total %u max %u\n",
+			SegForcedFrames,
+			SegMeans[MnClearA].Count, ChannelAverage(MnClearA), ChannelAverage(MnClearB),
+			ChannelAverage(MnClearTotal), SegMeans[MnClearTotal].Max,
+			SegMeans[MnForcedA].Count, ChannelAverage(MnForcedA), ChannelAverage(MnForcedB),
+			ChannelAverage(MnForcedTotal), SegMeans[MnForcedTotal].Max);
+
+		ResetSegments();
+	}
+
 	static void ResetWindow()
 	{
+		ResetSegments();
+
 		WindowStartTick = GetTickCount();
 		WindowRenderTicks = 0;
 		WindowPeakRenderTicks = 0;
@@ -213,6 +426,8 @@ namespace ViewZoomDiag
 			CellsMaxPerPass, CellListPeak, VisibleCellCapacity,
 			SaturatedPasses, CountResets, DroppedCells, DroppedMaxPerPass);
 
+		ReportSegments();
+
 		ResetWindow();
 	}
 }
@@ -248,15 +463,29 @@ DEFINE_HOOK(0x67E440, ViewZoom_LoadGame, 0x6)
 // any earlier would make that presentation read the enlarged surface.
 DEFINE_HOOK(0x4F44CB, ViewZoom_PreTacticalPasses, 0x5)
 {
+	using namespace ViewZoomDiag;
+
+	// T6: the install runs unconditionally, so it is timed around the call and
+	// the clock is only read when the diagnostics ask for it.
+	const bool timing = Enabled();
+	const unsigned long long installStart = timing ? QpcNow() : 0;
+
 	ViewZoomClass::InstallWideRender();
 
-	using namespace ViewZoomDiag;
+	if (timing)
+		RecordMean(MnInstall, QpcNow() - installStart);
 
 	if (!Enabled())
 		return 0;
 
 	RenderPending = true;
 	RenderStartTick = GetTickCount();
+
+	// T6: the frame sample starts here -- after the install, before the engine's
+	// first pass -- so `A` is the three passes alone.
+	SegPending = timing;
+	SegFrameForced = PendingForcedFrame;
+	QpcFrameStart = timing ? QpcNow() : 0;
 
 	if (!WindowStartTick)
 		WindowStartTick = RenderStartTick;
@@ -315,6 +544,13 @@ DEFINE_HOOK(0x6D0E3D, ViewZoom_SidebarPresentRestoreView, 0x7)
 // EBX is the TacticalClass instance, [ebx+0xE0] the list length before insert.
 DEFINE_HOOK(0x6DA938, ViewZoomDiag_RegisterCell, 0x6)
 {
+	// Every cell the passes will draw is queued here, so this is the one place
+	// that reliably says the enlarged surface is about to change. It has to run
+	// with the diagnostics off too, which is why it sits above the gate. The
+	// queue does not carry a rectangle, so this only marks the frame dirty --
+	// the partial resample still trusts the rectangles it was given.
+	ViewZoomClass::NoteFrameCellEnqueued();
+
 	using namespace ViewZoomDiag;
 
 	if (!Enabled())
@@ -425,6 +661,12 @@ DEFINE_HOOK(0x4F44AF, ViewZoom_PreTacticalRender, 0x5)
 		FullRedrawMode = 2
 	};
 
+	using namespace ViewZoomDiag;
+
+	// T6: time the whole pre hook, and RestoreNativeFrame() separately inside it.
+	const bool timing = Enabled();
+	const unsigned long long preStart = timing ? QpcNow() : 0;
+
 	const bool wasActive = ViewZoomClass::Active;
 
 	ViewZoomClass::BeginTacticalRender();
@@ -437,12 +679,26 @@ DEFINE_HOOK(0x4F44AF, ViewZoom_PreTacticalRender, 0x5)
 	// backup cannot be restored -- first zoomed frame, surface loss, or a
 	// changed view geometry -- and on the first frame of an enlarged pair.
 	if (wasActive != ViewZoomClass::Active
-		|| (ViewZoomClass::Active && !ViewZoomClass::RestoreNativeFrame())
+		|| (ViewZoomClass::Active && !ViewZoomDiag::TimeRestoreNativeFrame())
 		|| (ViewZoomClass::WantsWideView() && !ViewZoomClass::WideReady)
 		|| forcePeriodic)
 	{
 		R->EAX(FullRedrawMode);
 	}
+
+	// T6: hand the forced-redraw flag to 004F44CB, which is where the frame
+	// sample starts (this hook runs first).
+	if (timing)
+	{
+		PendingForcedFrame = forcePeriodic;
+		RecordMean(MnPre, QpcNow() - preStart);
+	}
+
+	// T1: EAX now holds the redraw mode the passes will run with -- the engine's
+	// own value unless the branch above replaced it with FullRedrawMode. A
+	// non-zero mode repaints the whole viewport, which no invalidation counter
+	// reports, so the frame must not be skipped.
+	ViewZoomClass::NoteFrameRedrawMode(R->EAX() != 0);
 
 	// Reproduce 004F44AF..004F44B3: `test eax,eax` / `setne cl`. No EFLAGS may
 	// be relied upon after a hook callback.
@@ -457,9 +713,39 @@ DEFINE_HOOK(0x4F44AF, ViewZoom_PreTacticalRender, 0x5)
 // present the result.
 DEFINE_HOOK(0x4F451B, ViewZoom_PostTacticalRender, 0x5)
 {
+	using namespace ViewZoomDiag;
+
+	// T6: `A` ends here, at the point where the engine's passes are done and our
+	// own EndTacticalRender() has not run yet; `B` is that call.
+	const bool timing = Enabled() && SegPending;
+	const unsigned long long postEntry = timing ? QpcNow() : 0;
+
 	ViewZoomClass::EndTacticalRender();
 
-	using namespace ViewZoomDiag;
+	if (timing)
+	{
+		const unsigned long long postExit = QpcNow();
+
+		RecordSample(SmpA, postEntry - QpcFrameStart);
+		RecordSample(SmpB, postExit - postEntry);
+		RecordSample(SmpTotal, postExit - QpcFrameStart);
+
+		if (SegFrameForced)
+		{
+			++SegForcedFrames;
+			RecordMean(MnForcedA, postEntry - QpcFrameStart);
+			RecordMean(MnForcedB, postExit - postEntry);
+			RecordMean(MnForcedTotal, postExit - QpcFrameStart);
+		}
+		else
+		{
+			RecordMean(MnClearA, postEntry - QpcFrameStart);
+			RecordMean(MnClearB, postExit - postEntry);
+			RecordMean(MnClearTotal, postExit - QpcFrameStart);
+		}
+
+		SegPending = false;
+	}
 
 	if (!Enabled())
 		return 0;

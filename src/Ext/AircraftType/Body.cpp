@@ -129,6 +129,9 @@ void AircraftTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Homing_AirBurstRangeXY.Read(exINI, pSection, "Missile.Homing.AirBurstRangeXY");
 	this->Homing_AirBurstRangeZ.Read(exINI, pSection, "Missile.Homing.AirBurstRangeZ");
 	this->Homing_CruiseSkipRange.Read(exINI, pSection, "Missile.Homing.CruiseSkipRange");
+	this->Homing_LeadFactor.Read(exINI, pSection, "Missile.Homing.LeadFactor");
+	this->Homing_MaxLeadTime.Read(exINI, pSection, "Missile.Homing.MaxLeadTime");
+	this->Homing_FuzeRadius.Read(exINI, pSection, "Missile.Homing.FuzeRadius");
 
 	if (this->Missile_Homing)
 	{
@@ -228,6 +231,11 @@ void AircraftTypeExt::Serialize(T& Stm)
 		// 旧存档读进来时新字段会拿到下一个旧字段的值（LoiterMode 曾因此恒为 false）。
 		.Process(this->AdvancedAircraftMissions_LoiterMode)
 		.Process(this->AdvancedAircraftMissions_HoverBrakeRange)
+		// Missile.Homing 的三个新键。类型级扩展属于存档内容, 追加字段后旧版本存档
+		// 将无法再加载 (Phobos 按版本过滤存档的既有行为, 见 docs/General-Info.md)。
+		.Process(this->Homing_LeadFactor)
+		.Process(this->Homing_MaxLeadTime)
+		.Process(this->Homing_FuzeRadius)
 		;
 }
 

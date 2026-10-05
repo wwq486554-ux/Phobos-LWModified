@@ -51,6 +51,9 @@ public:
 	Nullable<int> Homing_AirBurstRangeXY; // Missile.Homing.AirBurstRangeXY (leptons, 对空水平命中圈)
 	Nullable<int> Homing_AirBurstRangeZ; // Missile.Homing.AirBurstRangeZ (leptons, 目标高度上方容差)
 	Nullable<int> Homing_CruiseSkipRange; // Missile.Homing.CruiseSkipRange (leptons, 进入俯冲前的最小水平距离)
+	Nullable<double> Homing_LeadFactor; // Missile.Homing.LeadFactor (0 = 纯追踪=现状, 1 = 理论拦截点)
+	Nullable<int> Homing_MaxLeadTime; // Missile.Homing.MaxLeadTime (帧, 提前量时间上限)
+	Nullable<int> Homing_FuzeRadius; // Missile.Homing.FuzeRadius (leptons, 扫掠段引信半径)
 
 	explicit AircraftTypeExt(AircraftTypeClass* const OwnerObject) : TechnoTypeExt(OwnerObject)
 		, VoicePickup {}
@@ -90,6 +93,9 @@ public:
 		, Homing_AirBurstRangeXY {}
 		, Homing_AirBurstRangeZ {}
 		, Homing_CruiseSkipRange {}
+		, Homing_LeadFactor {}
+		, Homing_MaxLeadTime {}
+		, Homing_FuzeRadius {}
 	{ }
 
 	AircraftTypeClass* OwnerObject() const

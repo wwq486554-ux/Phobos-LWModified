@@ -562,8 +562,9 @@ Like Ares' `Missile.TrailerSeparation`, `Missile.TakeOffSeparation` also works w
 ### Guided spawned missiles
 
 - Spawned missiles (AircraftTypes with `MissileSpawn=yes`, such as the V3 rocket or the Dreadnought's missile) normally only fly toward the cell that was under the target unit when the missile was launched, so a moving target easily escapes them. Setting `Missile.Homing` makes such a missile track the target unit itself.
-  - While homing is active, the missile's aim is refreshed every frame to the target unit's current position, so the missile keeps steering after a moving target - using the missile's own existing turn/acceleration/altitude data - until it catches up and detonates on the ground where the target is. The aim is written to the rocket locomotor's own moving destination (the field the engine's per-frame steering step actually reads), and the engine's periodic spawner re-targeting and terminal-dive commitment are kept in sync so the missile does not dive early.
-  - If the target is an air unit, the missile pursues it and detonates at the unit's coordinates instead of on the ground beneath its cell.
+  - While homing is active, the missile's aim is refreshed every frame to the target unit's predicted intercept point, so the missile keeps steering after a moving target - using the missile's own existing turn/acceleration/altitude data - until it catches up and detonates on the ground where the target is. The aim is written to the rocket locomotor's own moving destination (the field the engine's per-frame steering step actually reads), and the engine's periodic spawner re-targeting and terminal-dive commitment are kept in sync so the missile does not dive early.
+  - The intercept point is solved every frame from the target's per-frame displacement, so it self-corrects within a few frames when the target stops or turns. `Missile.Homing.LeadFactor` scales the lead (0.8 by default; `0` disables it and restores pure pursuit) and `Missile.Homing.MaxLeadTime` caps the solved time of flight to 12 frames (about 0.8 seconds). A stationary target solves to its own coordinates, so the behaviour is then identical to pure pursuit. If the solved lead would sit further from the target than the missile currently is, which happens when a target closes faster than the missile flies or jumps position, the missile falls back to pure pursuit for that frame instead of being sent backwards.
+  - If the target is an air unit, the missile pursues it and detonates at the unit's coordinates instead of on the ground beneath its cell. The proximity fuze tests the relative segment travelled during the frame instead of the missile's current position alone, so a fast missile that crosses the fuze sphere between two frames still detonates; `Missile.Homing.FuzeRadius` (288 leptons by default) sets the radius of that swept test; with the default value a crossing detonates up to 288 leptons away instead of the 176 leptons of the plain 3D test, and setting it to `176` keeps the old reach.
   - When the tracked target dies, becomes cloaked or is removed, the missile flies to the last recorded aim point and detonates there.
   - Guidance is only used against non-building targets; buildings keep the vanilla object-target hit behavior.
   - For the mid-air detonation against air units the payload is taken from the same section's `Missile.Damage`/`Missile.EliteDamage`/`Missile.Warhead`/`Missile.EliteWarhead` (Ares) keys. Missiles without those keys fall back to the relevant vanilla missile group in `[General]`/`[CombatDamage]` (`V3Rocket*`, `CMisl*` or `DMisl*`), resolved the same way the engine does. If no payload can be resolved, the missile falls back to the vanilla ground-impact behavior.
@@ -572,13 +573,16 @@ In `rulesmd.ini`:
 ```ini
 [SOMEAIRCRAFT]                        ; AircraftType, spawned missile (MissileSpawn=yes)
 Missile.Homing=no                     ; boolean
+Missile.Homing.LeadFactor=0.8         ; double, 0 = pure pursuit, 1 = theoretical intercept point (clamped to 0-1)
+Missile.Homing.MaxLeadTime=12         ; integer, frames, cap on the solved time of flight (clamped to 0-600, 0 disables the lead)
+Missile.Homing.FuzeRadius=288         ; integer, range in leptons (swept-segment proximity fuze, 0 disables it)
 Missile.Homing.AirBurstRangeXY=384    ; integer, range in leptons (air burst horizontal radius)
 Missile.Homing.AirBurstRangeZ=256     ; integer, range in leptons (air burst vertical tolerance above target)
 Missile.Homing.CruiseSkipRange=512    ; integer, range in leptons (do not commit to terminal dive beyond this distance)
 ```
 
 ```{note}
-Homing re-aims the missile in flight and relies on the missile's own steering data, so it works best on cruise-type missiles (`Missile.LazyCurve=no`). Purely ballistic trajectories (`Missile.LazyCurve=yes`, such as the vanilla V3 rocket) cannot be steered once launched. Against air units the missile's cruise altitude (`Missile.Altitude` or the vanilla `*Altitude` group) should still be higher than the target's altitude for the missile to be able to reach it. The three optional `Missile.Homing.*` keys can be used to tune the air-burst radius and the distance at which the missile is allowed to start its terminal dive.
+Homing re-aims the missile in flight and relies on the missile's own steering data, so it works best on cruise-type missiles (`Missile.LazyCurve=no`). Purely ballistic trajectories (`Missile.LazyCurve=yes`, such as the vanilla V3 rocket) cannot be steered once launched. Against air units the missile's cruise altitude (`Missile.Altitude` or the vanilla `*Altitude` group) should still be higher than the target's altitude for the missile to be able to reach it. The optional `Missile.Homing.*` keys can be used to tune the lead, the air-burst radius and the distance at which the missile is allowed to start its terminal dive.
 ```
 
 ### Damaged aircraft image changes

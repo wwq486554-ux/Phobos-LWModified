@@ -447,6 +447,8 @@ HideShakeEffects=false           ; boolean
   - Slots use the same 0-based numbering as `NoAmmoWeapon` and can be listed as `BodyWeapon=0,1`; `-1` means every slot.
   - Multi-turret vehicles are supported (all turrets share one facing, so they lock together). The vanilla `WeaponXTurretLocked` art tag is left untouched.
 - [Guided spawned missiles (`Missile.Homing`)](New-or-Enhanced-Logics.md#guided-spawned-missiles)
+  - `Missile.Homing` now aims at a predicted intercept point instead of the target's current position, so a missile leads a moving target instead of chasing it. `Missile.Homing.LeadFactor` (0.8) scales the lead and `Missile.Homing.MaxLeadTime` (12 frames) caps it; `LeadFactor=0` restores the old pure pursuit.
+  - The air proximity fuze tests the relative segment the missile travelled during the frame, so a fast missile that crosses the fuze sphere between two frames still detonates. `Missile.Homing.FuzeRadius` (288 leptons) sets that radius.
 - [Universal scatter shaping](New-or-Enhanced-Logics.md#universal-scatter-shaping) (by laowang)
   - `BallisticScatter.Min/Max`, the radius distribution, the scatter ellipse and the distance ramp now mean the same thing on every scatter path, instead of depending on which engine routine happens to scatter the projectile: the `FlakScatter` + `Inviso` one in `BulletClass::Unlimbo`, both `TechnoClass::Fire_At` branches, Phobos trajectories, `ClusterScatter` and SweepFire.
   - `Sigma` reshapes the radius distribution, `Aspect` turns the circular scatter into an area-conserving ellipse, and `Divergence` reshapes how the scatter grows with distance, so dispersion can be tuned to resemble real artillery spread.

@@ -32,6 +32,15 @@ public:
 	bool Homing_Active; // 本颗导弹当前是否处于制导飞行
 	TechnoClass* Homing_Target; // 锁定的目标 (死亡/隐形后置空, 靠 Homing_LastAim 兜底)
 	CoordStruct Homing_LastAim; // 失锁后继续飞往并引爆的最后瞄准点
+	// 预判制导的瞬时状态: 上一帧双方坐标 + 目标速度 EMA (单位 leptons/帧)。
+	// 刻意不进 Serialize: 读档后第一帧 Homing_HasPrev=false 退化为纯追踪, 第二帧
+	// 自动恢复; 纯运行期状态, 不占用存档布局。
+	bool Homing_HasPrev; // Homing_MissilePrev / Homing_TargetPrev 是否已记录
+	CoordStruct Homing_MissilePrev; // 上一帧导弹坐标
+	CoordStruct Homing_TargetPrev; // 上一帧目标坐标
+	double Homing_TargetVelX;
+	double Homing_TargetVelY;
+	double Homing_TargetVelZ;
 
 	explicit AircraftExt(AircraftClass* const OwnerObject) : FootExt(OwnerObject)
 		, Strafe_BombsDroppedThisRound { 0 }
@@ -48,6 +57,12 @@ public:
 		, Homing_Active { false }
 		, Homing_Target { nullptr }
 		, Homing_LastAim {}
+		, Homing_HasPrev { false }
+		, Homing_MissilePrev {}
+		, Homing_TargetPrev {}
+		, Homing_TargetVelX { 0.0 }
+		, Homing_TargetVelY { 0.0 }
+		, Homing_TargetVelZ { 0.0 }
 	{ }
 
 	AircraftClass* OwnerObject() const

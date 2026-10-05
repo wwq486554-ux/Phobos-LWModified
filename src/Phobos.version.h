@@ -25,7 +25,7 @@
 // NOTE (unofficial fork): the "-pbsnew" suffix is added by the Phobos-LWModified fork so that its
 // builds are distinguishable from official Phobos builds in logs, crash reports and file metadata.
 // It is the only change this fork makes to this header.
-#define PRERELEASE_SUFFIX "alpha1-pbsnew1"
+#define PRERELEASE_SUFFIX "alpha1-pbsnew2"
 
 #pragma endregion
 

@@ -949,3 +949,4 @@ This page lists all the individual contributions to the project by their author.
   - Universal scatter shaping: `Sigma` / `Aspect` / `Divergence` (plus the global `[General] Divergence`) give `BallisticScatter` the same meaning on every engine scatter path, so dispersion can be tuned to resemble real artillery spread
   - Allow an armed engineer to attack when force-firing instead of the click being rewritten back to capture
   - `Trajectory.Engrave.FiringAnim` for a continuous firing animation on the Engrave trajectory
+  - Tactical view zoom: the tactical map is rendered at a resolution independent of the UI, with a configurable level table, a runtime whole-map level, three rebindable hotkeys and a middle-click reset

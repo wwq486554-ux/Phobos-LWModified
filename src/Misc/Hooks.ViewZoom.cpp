@@ -600,10 +600,22 @@ DEFINE_HOOK(0x692325, ViewZoom_ProcessClickCoords, 0x6)
 
 	// The engine un-projects this point against view_bound and TacticalPos, so
 	// both have to describe the enlarged viewport while the click is converted.
-	ViewZoomClass::BeginInputViewport();
-
+	//
+	// The mapping has to be computed *first*. TransformViewRelativePoint() works
+	// off DSurface::ViewBounds (native outside the render window) and never reads
+	// view_bound, so its verdict already tells us whether this point really is on
+	// the map. Widening before that verdict is what let a sidebar click - the
+	// super weapon cameo - masquerade as a valid map point: the engine's
+	// ClientToCoords no longer took its "outside the view" fallback branch, so
+	// the targeting code treated the widened cell as a chosen target and fired
+	// at once, at whatever cell the enlarged geometry happened to produce (top
+	// right of the map). A point outside the native view must stay native, so
+	// the engine's own rejection still applies.
 	const bool applied = pSource
 		&& ViewZoomClass::TransformViewRelativePoint(*pSource, ViewZoomClass::AdjustedInput);
+
+	if (applied)
+		ViewZoomClass::BeginInputViewport();
 
 	ViewZoomClass::TraceInput("click", before, ViewZoomClass::AdjustedInput, applied);
 

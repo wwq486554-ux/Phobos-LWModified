@@ -462,7 +462,7 @@ ViewZoom.Diagnostics=false
 - `ViewZoom.WideView` - enables the zoom-out levels. Zooming in works without it, and it is off by default. (boolean)
 - `ViewZoom.WholeMap` - allows the whole-map level to be used at all. (boolean)
 - `ViewZoom.MiddleClickReset` - a middle click on the tactical view returns to level `1.0`. (boolean)
-- `ViewZoom.ShowHint` - announces the new level on the message bar and in the log on every level change. (boolean)
+- `ViewZoom.ShowHint` - writes the new level to the log on every level change. (boolean)
 - `ViewZoom.FullRedrawEvery` - forces one whole-viewport engine repaint every N frames. The engine only redraws what its invalidation asks for, so this bounds whatever residue that leaves behind while zoomed out. `-1` disables it, `0` derives the interval from the measured cost of a forced frame. (integer)
 - `ViewZoom.MaxStaticSkip` - while a zoomed-out level is active, a frame that changed nothing and did not move the camera skips the map resample entirely. This caps how many frames in a row may be skipped before one is forced, which is what bounds a drawing path that changes pixels without reporting them. `0` disables the skip. (integer)
 - `ViewZoom.TranslateDirtyAreas` - the renderer's invalidation inputs are expressed relative to the live viewport, which outside the render window is the native one; this moves the rectangles registered by the producers into the enlarged view. (boolean)

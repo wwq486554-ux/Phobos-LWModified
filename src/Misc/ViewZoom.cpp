@@ -1587,6 +1587,15 @@ void ViewZoomClass::TraceInput(const char* pTag, const Point2D& input, const Poi
 
 	const auto& view = DSurface::ViewBounds;
 
+	// The engine's own ProcessClickCoords tolerates a missing TacticalClass
+	// (0x692361), and widening the trace gate to every zoomed level made this
+	// dereference reachable in more situations than the whole-map level alone,
+	// so it must tolerate it too.
+	const TacticalClass* pTactical = TacticalClass::Instance;
+	const unsigned char* pTacticalBytes = reinterpret_cast<const unsigned char*>(pTactical);
+	const int originX = pTactical ? *reinterpret_cast<const int*>(pTacticalBytes + TacticalViewOrigin) : 0;
+	const int originY = pTactical ? *reinterpret_cast<const int*>(pTacticalBytes + TacticalViewOrigin + 4u) : 0;
+
 	Debug::Log("[ViewZoom] input %-6s (%d,%d) -> (%d,%d) applied %d | factor %.3f | view %d,%d %dx%d big %dx%d dest %d,%d %dx%d | cam %d,%d org was %d,%d now %d,%d\n",
 		pTag, input.X, input.Y, output.X, output.Y, applied,
 		GetFactor(),
@@ -1595,8 +1604,7 @@ void ViewZoomClass::TraceInput(const char* pTag, const Point2D& input, const Poi
 		WideDestRect.X, WideDestRect.Y, WideDestRect.Width, WideDestRect.Height,
 		TraceCamera[0], TraceCamera[1],
 		TracePreviousOrigin[0], TracePreviousOrigin[1],
-		*reinterpret_cast<const int*>(reinterpret_cast<const unsigned char*>(TacticalClass::Instance) + TacticalViewOrigin),
-		*reinterpret_cast<const int*>(reinterpret_cast<const unsigned char*>(TacticalClass::Instance) + TacticalViewOrigin + 4u));
+		originX, originY);
 }
 
 void ViewZoomClass::InjectBandFill(int budget)

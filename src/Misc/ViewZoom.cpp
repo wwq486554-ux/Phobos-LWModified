@@ -1567,10 +1567,10 @@ void ViewZoomClass::TraceInput(const char* pTag, const Point2D& input, const Poi
 {
 	// Only the zoomed levels are interesting, and the engine converts the same
 	// click many times per frame, so identical repeats are dropped and the
-	// budget is spent on actual changes only.
-	// 1.25x / 1.5x are verified, so the budget goes to the level that still
-	// misbehaves.
-	if (!Diagnostics || InputTraceCount >= 60 || !IsWholeMapLevel(CurrentLevel))
+	// budget is spent on actual changes only. Every zoomed level is traced: the
+	// sidebar click regression (super weapon cameo firing on the spot) has to be
+	// checkable at 1.25x as well, not only at the whole-map level.
+	if (!Diagnostics || InputTraceCount >= 200 || !IsZoomed())
 		return;
 
 	if (input.X == LastTraceInput.X && input.Y == LastTraceInput.Y

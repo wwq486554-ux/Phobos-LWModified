@@ -235,9 +235,14 @@ DEFINE_HOOK(0x701900, TechnoClass_ReceiveDamage_Shield, 0x6)
 	// which leaves no wreck and fires no DeathWeapon. Clamp a lethal payment to 1 HP and tell the
 	// freeze, so that it asks for the erase in the same frame. This sits outside the branch above
 	// because the freeze deals its damage with IgnoreDefenses set, which skips the shield half.
+	//
+	// That same flag makes the engine apply the amount 1:1 - it skips the warhead's Versus and
+	// the armour multiplier too, not just the shields. So the lethality test has to compare the
+	// raw amount: running it through MapClass::GetTotalDamage again folds those modifiers in a
+	// second time, under-estimates the damage and lets the target die the ordinary way (wreck
+	// and DeathWeapon), which is exactly what the warp erase exists to avoid.
 	if (TemporalTemp::PayingFreezeDamage
-		&& pThis->Health > 0 && damage != 0
-		&& MapClass::GetTotalDamage(damage, args->WH, pThis->GetTechnoType()->Armor, args->DistanceToEpicenter) >= pThis->Health)
+		&& pThis->Health > 0 && damage > 0 && damage >= pThis->Health)
 	{
 		damage = 0;
 		pThis->Health = 1;

@@ -8,6 +8,7 @@
 #include <Ext/Unit/Body.h>
 #include <Ext/Scenario/Body.h>
 #include <Ext/WeaponType/Body.h>
+#include <Ext/WarheadType/Body.h>
 #include <Ext/Event/Body.h>
 #include <Ext/Bullet/Trajectories/EngraveLine.h>
 
@@ -17,6 +18,12 @@
 #include <Utilities/AresFunctions.h>
 #include <Utilities/AresHelper.h>
 #include <Interop/TechnoExt.h>
+
+namespace TemporalTemp
+{
+	bool PayingFreezeDamage = false;
+	bool FreezeDamageWasLethal = false;
+}
 
 TechnoExt::~TechnoExt()
 {
@@ -1959,6 +1966,7 @@ void TechnoExt::Serialize(T& Stm)
 		.Process(this->PreventCrewEscape)
 		.Process(this->Sweeps)
 		.Process(this->SweepFireCooldownTimer)
+		.Process(this->TemporalFreeze)
 		;
 }
 
@@ -2051,3 +2059,266 @@ DEFINE_HOOK(0x710415, TechnoClass_DetachAnim, 0x6)
 
 	return 0;
 }
+
+#pragma region Temporal.Duration
+
+// --- Fixed-duration Temporal freeze -----------------------------------------------------------
+//
+// Temporal.Duration replaces the vanilla "hold the target until WarpRemaining runs out, then
+// erase it" with a warp of a fixed length that deals the damage the target owes for the time
+// it actually spent frozen. The math follows the vanilla erase rate:
+//
+//   erasePerFrame = weapon->Damage, with the same firepower / armour multipliers
+//                   TemporalClass::GetWarpPerStep uses (Versus stays out of it - it is
+//                   applied once, over the total, by MapClass::GetTotalDamage below)
+//   vanillaTime   = Strength * 10 / erasePerFrame      (frames vanilla would need to erase it)
+//   owed          = Strength * Duration / vanillaTime  (= Duration * erasePerFrame / 10)
+//   total         = MapClass::GetTotalDamage(owed, warhead, armour, 0)
+//
+// So a freeze that lasts as long as vanilla's erase would deals exactly the target's full
+// health. The owed amount is paid out as `total * elapsed / duration`, which is what makes a
+// freeze that is cut short (the caster lets go, walks away or dies) only cost what it lasted.
+
+WeaponTypeClass* TechnoExt::GetTemporalWarpWeapon(TechnoClass* pOwner)
+{
+	if (!pOwner)
+		return nullptr;
+
+	// The weapon that actually delivered the Temporal warhead wins, which is the same
+	// resolution TemporalClass::GetWarpPerStep uses. The engine's own selection is only a
+	// fallback - TemporalWeapon.AnySlot=no stops the delivery from being recorded at all.
+	WeaponTypeClass* pWeapon = nullptr;
+
+	if (const auto pExt = TechnoExt::TryFetch(pOwner))
+		pWeapon = pExt->TemporalWarpWeapon;
+
+	if (!pWeapon)
+	{
+		const int index = pOwner->SelectWeapon(nullptr);
+		const auto pType = pOwner->GetTechnoType();
+
+		if (index >= 0 && index < pType->WeaponCount)
+			pWeapon = pOwner->GetWeapon(index)->WeaponType;
+	}
+
+	if (!pWeapon || !pWeapon->Warhead || !pWeapon->Warhead->Temporal)
+		return nullptr;
+
+	return pWeapon;
+}
+
+// The per-frame erase rate this warp runs at, mirroring WarpPerStep::TemporalClassFake::
+// _GetWarpPerStep with Temporal.ApplyVersus left out (see the block comment above).
+static int GetFreezeErasePerFrame(TechnoClass* pOwner, WeaponTypeClass* pWeapon, TechnoClass* pTarget, WarheadTypeClass* pWarhead)
+{
+	int step = pWeapon->Damage;
+	const auto pWHExt = WarheadTypeExt::Fetch(pWarhead);
+
+	if (pWHExt->Temporal_ApplyMultiplier.Get(RulesExt::Global()->Temporal_ApplyMultiplier))
+	{
+		step = static_cast<int>(step * TechnoExt::GetCurrentFirepowerMultiplier(pOwner));
+
+		if (step > 0)
+			step = static_cast<int>(step / TechnoExt::GetCurrentArmorMultiplier(pTarget, pTarget->GetTechnoType(), pOwner->Owner, pWarhead));
+	}
+
+	return step;
+}
+
+// Deals the damage a freeze still owes. Returns true when that would have killed the target, in
+// which case ReceiveDamage clamped it to 1 HP instead of running the normal death path - the
+// caller then asks the engine for the warp erase, which removes the unit without a wreck and
+// without firing a DeathWeapon.
+static bool PayTemporalFreeze(TechnoExt* pExt, TechnoClass* pTarget, TechnoClass* pOwner, int amount)
+{
+	if (!pTarget || !pOwner || amount <= 0 || !pExt->TemporalFreeze.Warhead)
+		return false;
+
+	// The freeze's own damage is never gated by Temporal.AllowDamage (that key only says
+	// whether *outside* weapons may hurt the frozen unit), so it is dealt as damage that
+	// ignores defenses. That also skips shields, which is what the vanilla erase does.
+	int damage = amount;
+
+	TemporalTemp::PayingFreezeDamage = true;
+	TemporalTemp::FreezeDamageWasLethal = false;
+	pTarget->ReceiveDamage(&damage, 0, pExt->TemporalFreeze.Warhead, pOwner, true, false, pOwner->Owner);
+	const bool lethal = TemporalTemp::FreezeDamageWasLethal;
+	TemporalTemp::PayingFreezeDamage = false;
+	TemporalTemp::FreezeDamageWasLethal = false;
+
+	return lethal;
+}
+
+void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
+{
+	if (!pTemporal || !pTarget)
+		return;
+
+	const auto pOwner = pTemporal->Owner;
+
+	if (!pOwner)
+		return;
+
+	const auto pWeapon = GetTemporalWarpWeapon(pOwner);
+
+	if (!pWeapon)
+		return;
+
+	const auto pWHExt = WarheadTypeExt::Fetch(pWeapon->Warhead);
+	const int duration = pWHExt->Temporal_Duration;
+
+	// The default, 0, leaves the vanilla warp alone: WarpRemaining decides when the target
+	// is erased and the warhead's own erase rate decides how fast.
+	if (duration <= 0)
+		return;
+
+	const int erasePerFrame = GetFreezeErasePerFrame(pOwner, pWeapon, pTarget, pWeapon->Warhead);
+
+	if (erasePerFrame <= 0)
+		return;
+
+	const long long owed = static_cast<long long>(duration) * erasePerFrame / 10;
+
+	if (owed <= 0)
+		return;
+
+	const int total = MapClass::GetTotalDamage(static_cast<int>(owed), pWeapon->Warhead, pTarget->GetType()->Armor, 0);
+
+	if (total <= 0)
+		return;
+
+	auto& record = this->TemporalFreeze;
+	record.Active = true;
+	record.TargetID = pTarget->UniqueID;
+	record.Duration = duration;
+	record.TickRof = std::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier));
+	record.Total = total;
+	record.Paid = 0;
+	record.Elapsed = 0;
+	record.Mode = pWHExt->Temporal_DamageMode;
+	record.Warhead = pWeapon->Warhead;
+	record.TickTimer.Start(record.TickRof);
+}
+
+void TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
+{
+	auto& record = this->TemporalFreeze;
+
+	if (!record.Active || !pTemporal)
+		return;
+
+	const auto pTarget = pTemporal->Target;
+
+	// Another warp's record: this caster can only hold one freeze at a time, but its
+	// Temporal instance may already have been re-targeted by the time it lets go.
+	if (pTarget && pTarget->UniqueID != record.TargetID)
+		return;
+
+	if (pTarget && pTarget->IsAlive && record.Warhead && record.Duration > 0)
+	{
+		const int due = static_cast<int>(static_cast<long long>(record.Total) * record.Elapsed / record.Duration);
+		const int owed = due - record.Paid;
+
+		if (owed > 0)
+		{
+			PayTemporalFreeze(this, pTarget, pTemporal->Owner, owed);
+			record.Paid = due;
+		}
+	}
+
+	record.Active = false;
+	record.Warhead = nullptr;
+	record.TickTimer.Stop();
+}
+
+TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
+{
+	auto& record = this->TemporalFreeze;
+
+	if (!record.Active || !pTemporal || !pTarget || pTarget->UniqueID != record.TargetID)
+		return TemporalFreezeFrame::NotHandled;
+
+	// After a save/load the warhead is not serialized; resolve it again from the caster's
+	// warp, and drop the record rather than guessing if that no longer works.
+	if (!record.Warhead)
+	{
+		if (const auto pWeapon = GetTemporalWarpWeapon(pTemporal->Owner))
+			record.Warhead = pWeapon->Warhead;
+
+		if (!record.Warhead)
+		{
+			record.Active = false;
+			return TemporalFreezeFrame::NotHandled;
+		}
+	}
+
+	++record.Elapsed;
+
+	const bool finished = record.Elapsed >= record.Duration;
+	bool lethal = false;
+
+	if (finished || (record.Mode == TemporalDamageMode::Continuous && record.TickTimer.Expired()))
+	{
+		const int due = finished
+			? record.Total
+			: static_cast<int>(static_cast<long long>(record.Total) * record.Elapsed / record.Duration);
+		const int owed = due - record.Paid;
+
+		if (owed > 0)
+		{
+			lethal = PayTemporalFreeze(this, pTarget, pTemporal->Owner, owed);
+			record.Paid = due;
+		}
+
+		if (finished)
+		{
+			record.Active = false;
+			record.Warhead = nullptr;
+			record.TickTimer.Stop();
+		}
+		else
+		{
+			record.TickTimer.Start(record.TickRof);
+		}
+	}
+
+	if (lethal)
+		return TemporalFreezeFrame::Erase;
+
+	if (finished && pTemporal->Target == pTarget)
+	{
+		// The freeze is over and the target survived what it owed: hand it back, exactly the
+		// way the engine's own life timer expiry does (LetGo, then straight out of Update).
+		pTemporal->LetGo();
+	}
+
+	return TemporalFreezeFrame::KeepAlive;
+}
+
+bool TemporalFreezeInstance::Load(PhobosStreamReader& stm, bool registerForChange)
+{
+	return this->Serialize(stm);
+}
+
+bool TemporalFreezeInstance::Save(PhobosStreamWriter& stm) const
+{
+	return const_cast<TemporalFreezeInstance*>(this)->Serialize(stm);
+}
+
+template <typename T>
+bool TemporalFreezeInstance::Serialize(T& stm)
+{
+	return stm
+		.Process(this->Active)
+		.Process(this->TargetID)
+		.Process(this->Duration)
+		.Process(this->TickRof)
+		.Process(this->Total)
+		.Process(this->Paid)
+		.Process(this->Elapsed)
+		.Process(this->TickTimer)
+		.Process(this->Mode)
+		.Success();
+}
+
+#pragma endregion

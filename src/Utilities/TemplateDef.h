@@ -823,6 +823,32 @@ namespace detail
 	}
 
 	template <>
+	inline bool read<TemporalDamageMode>(TemporalDamageMode& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			static const std::pair<const char*, TemporalDamageMode> Names[] =
+			{
+				{"end", TemporalDamageMode::End},
+				{"continuous", TemporalDamageMode::Continuous},
+			};
+
+			for (auto const& [name, val] : Names)
+			{
+				if (_strcmpi(parser.value(), name) == 0)
+				{
+					value = val;
+					return true;
+				}
+			}
+
+			Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected end or continuous");
+		}
+
+		return false;
+	}
+
+	template <>
 	inline bool read<AffectedHouse>(AffectedHouse& value, INI_EX& parser, const char* pSection, const char* pKey)
 	{
 		if (parser.ReadString(pSection, pKey))

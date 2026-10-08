@@ -12,6 +12,21 @@
 #include <New/Entity/AttachEffectClass.h>
 
 class AirstrikeClass;
+class TemporalClass;
+class WarheadTypeClass;
+
+// The two flags the fixed-duration Temporal freeze uses to talk to the ReceiveDamage hook
+// in Hooks.ReceiveDamage.cpp. The damage a freeze deals is dealt synchronously, so plain
+// flags are enough - there is no re-entrancy.
+namespace TemporalTemp
+{
+	// Set while the freeze pays out its own damage. It makes ReceiveDamage clamp a lethal
+	// hit to 1 HP instead of letting the engine run the normal death handling, so that the
+	// target is removed through the engine's warp erase rather than a wreck.
+	extern bool PayingFreezeDamage;
+	// Set by that clamp when it fired, i.e. the payment would have killed the target.
+	extern bool FreezeDamageWasLethal;
+}
 class BulletClass;
 
 // One sweep in progress. A weapon with SweepFire enabled walks a virtual line
@@ -34,6 +49,41 @@ struct SweepFireInstance
 	int ShotsFired { 0 }; // Follow-up shots fired so far, for diagnostics
 	double LastDistance { 0.0 }; // Distance along the line the last shot was fired at
 	DWORD AnchorTargetID { 0 }; // UniqueID of the target the line is attached to, 0 if none
+
+	bool Load(PhobosStreamReader& stm, bool registerForChange);
+	bool Save(PhobosStreamWriter& stm) const;
+
+private:
+	template <typename T>
+	bool Serialize(T& stm);
+};
+
+// What the per-frame step of a fixed-duration freeze wants the engine to do this frame.
+enum class TemporalFreezeFrame
+{
+	NotHandled = 0, // this techno has no freeze for that Temporal; keep the vanilla decision
+	KeepAlive,      // a freeze is running: hold the warp open, do not erase yet
+	Erase           // the damage finished the target off: erase it the vanilla warp way
+};
+
+// One "freeze the target for Temporal.Duration frames" attack. It lives on the *caster*
+// (which is what TemporalImUsing belongs to) and finds its victim through TargetID, the
+// same way SweepFireInstance does - a raw pointer would not survive a save/load.
+struct TemporalFreezeInstance
+{
+	bool Active { false };
+	DWORD TargetID { 0 }; // UniqueID of the unit being held
+	int Duration { 0 }; // Frames the freeze lasts, from Temporal.Duration
+	int TickRof { 0 }; // Frames between two payments (weapon ROF, AE.ROFMultiplier applied)
+	int Total { 0 }; // Damage owed for a full Duration, warhead modifiers included
+	int Paid { 0 }; // Damage already dealt
+	int Elapsed { 0 }; // Frames the target has been frozen for
+	CDTimerClass TickTimer {}; // Frames left until the next payment
+	TemporalDamageMode Mode { TemporalDamageMode::Continuous };
+	// Not serialized: after a load the warhead is resolved again from the caster's
+	// Temporal warp the first time the freeze is advanced, and the record is dropped if
+	// that fails (the warp may have ended while the game was being saved).
+	WarheadTypeClass* Warhead { nullptr };
 
 	bool Load(PhobosStreamReader& stm, bool registerForChange);
 	bool Save(PhobosStreamWriter& stm) const;
@@ -185,6 +235,24 @@ public:
 	// Frames between the end of a sweep and the start of the next one.
 	CDTimerClass SweepFireCooldownTimer;
 
+	// --- Temporal.Duration ---
+	// The "one-shot freeze" this techno is currently applying to someone, if any.
+	TemporalFreezeInstance TemporalFreeze;
+
+	// Registers the freeze a Temporal detonation just started. Called from the tail of
+	// TemporalClass::Fire; does nothing unless the warhead sets Temporal.Duration.
+	void BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget);
+	// Ends this techno's freeze on pTemporal's target (the warp let go, or the duration ran
+	// out): pays the damage still owed for the time the target was actually frozen and
+	// clears the record.
+	void EndTemporalFreeze(TemporalClass* pTemporal);
+	// Advances the freeze by one frame. Returns whether the engine should still erase the
+	// target, keep it warped, or whether this techno has nothing to say about it.
+	TemporalFreezeFrame UpdateTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget);
+	// The weapon whose Temporal warhead is holding this techno's current warp: the one that
+	// actually delivered it when that is known, otherwise the engine's own selection.
+	static WeaponTypeClass* GetTemporalWarpWeapon(TechnoClass* pOwner);
+
 	TechnoExt(TechnoClass* OwnerObject) : RadioExt(OwnerObject)
 		, TypeExtData { nullptr }
 		, Shield {}
@@ -244,6 +312,7 @@ public:
 		, PreventCrewEscape { false }
 		, Sweeps {}
 		, SweepFireCooldownTimer {}
+		, TemporalFreeze {}
 	{ }
 
 	void OnEarlyUpdate();

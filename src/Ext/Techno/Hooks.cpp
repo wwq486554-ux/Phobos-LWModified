@@ -127,10 +127,67 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 
 		const auto pExt = TechnoExt::Fetch(pTarget);
 		pExt->UpdateTemporal();
+
+		// Temporal.Duration: a warp held for a fixed number of frames that pays the damage
+		// the target owes for that time instead of erasing it when WarpRemaining runs out.
+		// While one is running the vanilla erase decision below must not be taken.
+		if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
+		{
+			switch (pOwnerExt->UpdateTemporalFreeze(pThis, pTarget))
+			{
+			case TemporalFreezeFrame::Erase:
+				return 0x71A895;
+			case TemporalFreezeFrame::KeepAlive:
+				return 0x71AB08;
+			default:
+				break;
+			}
+		}
 	}
 
 	// Recovering vanilla instructions that were broken by a hook call
 	return pThis->WarpRemaining <= 0 ? 0x71A895 : 0x71AB08;
+}
+
+// TemporalClass::Fire sets target->BeingWarpedOut at 0x71B0EA, which is where a warp actually
+// becomes visible to the target. Registering the freeze here rather than in the detonation hook
+// covers every route into Fire (any weapon slot, spawned weapons, multi-weapon logics) and both
+// the plain and the helper-chain branch, without another address to keep in sync.
+// ECX still holds the target this instance just took, ESI is the instance itself.
+DEFINE_HOOK(0x71B0EA, TemporalClass_Fire_BeginTemporalFreeze, 0x7)
+{
+	GET(TemporalClass*, pTemporal, ESI);
+	GET(TechnoClass*, pTarget, ECX);
+
+	if (const auto pOwnerExt = TechnoExt::TryFetch(pTemporal->Owner))
+		pOwnerExt->BeginTemporalFreeze(pTemporal, pTarget);
+
+	return 0;
+}
+
+// LetGo clears target->BeingWarpedOut and target->TemporalTargetingMe, i.e. it is where the
+// warp ends for the target, and JustLetGo does the same for the engine's forced cancellation
+// (the four calls inside one function around 0x4FC6D0). A fixed-duration freeze has to pay what
+// the target owes for the time it was actually frozen on both routes - hooking only one of them
+// would leak the record whenever the engine cancels a warp on its own.
+DEFINE_HOOK(0x71ABC0, TemporalClass_LetGo_TemporalFreeze, 0x6)
+{
+	GET(TemporalClass*, pThis, ECX);
+
+	if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
+		pOwnerExt->EndTemporalFreeze(pThis);
+
+	return 0;
+}
+
+DEFINE_HOOK(0x71AD40, TemporalClass_JustLetGo_TemporalFreeze, 0x6)
+{
+	GET(TemporalClass*, pThis, ECX);
+
+	if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
+		pOwnerExt->EndTemporalFreeze(pThis);
+
+	return 0;
 }
 
 DEFINE_HOOK_AGAIN(0x51B389, FootClass_TunnelAI_Enter, 0x6) // InfantryClass_TunnelAI

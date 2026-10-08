@@ -72,6 +72,15 @@ public:
 	Valueable<bool> Temporal_AllowDamage;
 	Valueable<bool> Temporal_AllowAttachEffects;
 
+	// Fixed-duration ("one-shot") freeze. Duration is how many frames the warp is held
+	// for; 0 - the default - disables the whole mode and leaves the vanilla "erase the
+	// target once WarpRemaining runs out" behaviour untouched. While such a freeze runs
+	// the engine's own erase decision is suppressed and the damage the target owes for
+	// the time it has spent frozen is dealt through ReceiveDamage instead; DamageMode
+	// picks between a tick every ROF frames and a single payment at the end.
+	Valueable<int> Temporal_Duration;
+	Valueable<TemporalDamageMode> Temporal_DamageMode;
+
 	Valueable<double> Crit_Chance;
 	Nullable<bool> Crit_ApplyChancePerTarget;
 	Valueable<int> Crit_ExtraDamage;
@@ -367,6 +376,8 @@ public:
 		, Temporal_ApplyMultiplier {}
 		, Temporal_AllowDamage { false }
 		, Temporal_AllowAttachEffects { false }
+		, Temporal_Duration { 0 }
+		, Temporal_DamageMode { TemporalDamageMode::Continuous }
 
 		, Crit_Chance { 0.0 }
 		, Crit_ApplyChancePerTarget {}

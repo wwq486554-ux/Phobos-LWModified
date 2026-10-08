@@ -125,27 +125,9 @@ WarheadTypeClass* WarheadTypeExt::GetFreezeSourceWarhead(TechnoClass* pTarget)
 	if (!pOwner)
 		return nullptr;
 
-	WeaponTypeClass* pWeapon = nullptr;
+	const auto pWeapon = TechnoExt::GetTemporalWarpWeapon(pOwner);
 
-	if (const auto pOwnerExt = TechnoExt::TryFetch(pOwner))
-		pWeapon = pOwnerExt->TemporalWarpWeapon;
-
-	// TemporalWeapon.AnySlot=no stops the recording above, so fall back to the weapon
-	// the engine itself would use for this warp.
-	if (!pWeapon)
-	{
-		const int index = pOwner->SelectWeapon(nullptr);
-		const auto pType = pOwner->GetTechnoType();
-
-		if (index >= 0 && index < pType->WeaponCount)
-			pWeapon = pOwner->GetWeapon(index)->WeaponType;
-	}
-
-	// Only a Temporal warhead can have started the warp this lookup is about.
-	if (!pWeapon || !pWeapon->Warhead || !pWeapon->Warhead->Temporal)
-		return nullptr;
-
-	return pWeapon->Warhead;
+	return pWeapon ? pWeapon->Warhead : nullptr;
 }
 
 bool WarheadTypeExt::AllowsDamageWhileFrozen(TechnoClass* pTarget)
@@ -256,6 +238,8 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Temporal_ApplyMultiplier.Read(exINI, pSection, "Temporal.ApplyMultiplier");
 	this->Temporal_AllowDamage.Read(exINI, pSection, "Temporal.AllowDamage");
 	this->Temporal_AllowAttachEffects.Read(exINI, pSection, "Temporal.AllowAttachEffects");
+	this->Temporal_Duration.Read(exINI, pSection, "Temporal.Duration");
+	this->Temporal_DamageMode.Read(exINI, pSection, "Temporal.DamageMode");
 
 	// Crits
 	this->Crit_Chance.Read(exINI, pSection, "Crit.Chance");
@@ -681,6 +665,8 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->Temporal_ApplyMultiplier)
 		.Process(this->Temporal_AllowDamage)
 		.Process(this->Temporal_AllowAttachEffects)
+		.Process(this->Temporal_Duration)
+		.Process(this->Temporal_DamageMode)
 
 		.Process(this->Crit_Chance)
 		.Process(this->Crit_ApplyChancePerTarget)

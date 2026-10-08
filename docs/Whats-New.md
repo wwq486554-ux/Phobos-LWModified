@@ -729,6 +729,9 @@ HideShakeEffects=false           ; boolean
 - Projectile release warheads and weapons (by CrimRecya)
 - [Allow a `Temporal` warhead to keep its target vulnerable](Fixed-or-Improved-Logics.md#allow-a-temporal-warhead-to-keep-its-target-vulnerable) (by laowang)
   - A unit that is being warped out is immune to all further damage in vanilla and skips every per-target warhead effect. `Temporal.AllowDamage` and `Temporal.AllowAttachEffects`, written on the warhead that is *holding* the target, lift those two gates so a chrono-frozen unit can keep being shot at and keep receiving effects.
+- [Freeze a unit for a fixed duration](Fixed-or-Improved-Logics.md#freeze-a-unit-for-a-fixed-duration) (by laowang)
+  - `Temporal.Duration` holds a Temporal warp for a fixed number of frames and deals the damage the target owes for the time it spent frozen, at the same erase rate vanilla uses - a duration equal to vanilla's erase duration costs the target its full health. `Temporal.DamageMode` pays it either as a tick every `ROF` frames or in one hit at the end.
+  - A freeze that is cut short only pays for the time it actually lasted, and a payment that would be lethal removes the target through the engine's warp erase instead of the normal death path, so there is no wreck and no `DeathWeapon`.
 
 #### Vanilla fixes:
 - [Armed engineers can attack](Fixed-or-Improved-Logics.md#armed-engineers-can-attack) (by laowang)

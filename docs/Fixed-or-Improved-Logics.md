@@ -3049,6 +3049,27 @@ Temporal.AllowDamage=false      ; boolean
 Temporal.AllowAttachEffects=false ; boolean
 ```
 
+### Freeze a unit for a fixed duration
+
+- A `Temporal=yes` warhead normally holds its target until the engine's erase counter runs out and then erases the unit. `Temporal.Duration` replaces that with a warp of a fixed length that deals the damage the target owes for the time it actually spent frozen:
+  - The erase rate per frame is the one vanilla itself uses - the firing weapon's `Damage`, with the firepower and armour multipliers applied when `Temporal.ApplyMultiplier` is on - so the vanilla erase duration for the target is `Strength * 10 / erase rate` frames.
+  - The damage owed for a whole `Temporal.Duration` is `Strength * Duration / vanilla erase duration`, converted through the warhead's own damage ratios (`Versus`, `ProneDamage`, ...) exactly once.
+  - A duration as long as vanilla's erase duration therefore costs the target exactly its full health.
+- `Temporal.DamageMode` decides how that damage is paid out:
+  - `continuous`, the default, pays a tick every `ROF` frames, so the target's health bar drains while it is held.
+  - `end` pays everything in a single hit when the freeze ends.
+- A freeze that is cut short - the caster stops, walks away, dies, or the engine cancels the warp on its own - only pays for the time the target really was frozen.
+- A payment that finishes the target off removes it through the engine's own warp erase: no wreck, no `DeathWeapon` and no self-destruct release. A freeze that runs its course without killing the target releases it, exactly as if the caster had let go.
+- The damage a freeze deals is never gated by `Temporal.AllowDamage`, which only says whether *outside* weapons may hurt the frozen unit.
+- `Temporal.Duration=0`, the default, leaves the vanilla behaviour intact down to the instruction.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWARHEAD]                   ; WarheadType
+Temporal.Duration=0             ; integer, frames
+Temporal.DamageMode=continuous  ; end or continuous
+```
+
 ### Allowing damage dealt to firer
 
 - You can now allow warhead to deal damage (and apply damage-adjacent effects such as `KillDriver` and `DisableWeapons/Sonar/Flash.Duration` *(Ares features)*) on the object that is considered as the firer of the Warhead even if it does not have `DamageSelf=true`.

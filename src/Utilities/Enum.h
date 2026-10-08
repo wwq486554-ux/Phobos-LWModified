@@ -482,3 +482,11 @@ enum class LocoWeaponEndAction
 	Warp,
 	Drop
 };
+
+// Temporal.DamageMode - how a fixed-duration Temporal freeze (Temporal.Duration) pays out the
+// damage it owes for the time the target spent frozen.
+enum class TemporalDamageMode : unsigned char
+{
+	End = 0,       // everything at once when the freeze ends
+	Continuous = 1 // a tick every ROF frames while it lasts
+};

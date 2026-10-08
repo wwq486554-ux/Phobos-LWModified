@@ -230,6 +230,22 @@ DEFINE_HOOK(0x701900, TechnoClass_ReceiveDamage_Shield, 0x6)
 		}
 	}
 
+	// The damage a fixed-duration Temporal freeze (Temporal.Duration) pays out must not run the
+	// ordinary death path - the target is supposed to leave through the engine's warp erase,
+	// which leaves no wreck and fires no DeathWeapon. Clamp a lethal payment to 1 HP and tell the
+	// freeze, so that it asks for the erase in the same frame. This sits outside the branch above
+	// because the freeze deals its damage with IgnoreDefenses set, which skips the shield half.
+	if (TemporalTemp::PayingFreezeDamage
+		&& pThis->Health > 0 && damage != 0
+		&& MapClass::GetTotalDamage(damage, args->WH, pThis->GetTechnoType()->Armor, args->DistanceToEpicenter) >= pThis->Health)
+	{
+		damage = 0;
+		pThis->Health = 1;
+		pThis->EstimatedHealth = 1;
+		TemporalTemp::FreezeDamageWasLethal = true;
+		ReceiveDamageTemp::SkipLowDamageCheck = true;
+	}
+
 	return 0;
 }
 

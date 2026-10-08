@@ -74,6 +74,7 @@ struct TemporalFreezeInstance
 	bool Active { false };
 	DWORD TargetID { 0 }; // UniqueID of the unit being held
 	int Duration { 0 }; // Frames the freeze lasts, from Temporal.Duration
+	int Interval { 0 }; // Frames the warp is held after that, from Temporal.Interval
 	int TickRof { 0 }; // Frames between two payments (weapon ROF, AE.ROFMultiplier applied)
 	int Total { 0 }; // Damage owed for a full Duration, warhead modifiers included
 	int Paid { 0 }; // Damage already dealt

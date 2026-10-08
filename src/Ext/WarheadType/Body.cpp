@@ -101,49 +101,66 @@ bool WarheadTypeExt::CanAffectInvulnerable(TechnoClass* pTarget) const
 
 // The warhead whose Temporal warp is holding pTarget right now.
 //
-// TechnoClass::TemporalTargetingMe (+0x278) is the TemporalClass instance the engine
-// itself considers to be warping this target: TemporalClass::Fire stores itself there
-// (0x71AF98) and LetGo clears it again (0x71AC0E). Going through its Owner leads to
-// the caster, whose TechnoExt remembers the weapon that actually delivered the
-// Temporal warhead - see TechnoExt::TemporalWarpWeapon.
+// TechnoClass::TemporalTargetingMe (+0x278) is the instance the engine keeps as "who is
+// warping me": TemporalClass::Fire stores itself there (0x71AF98) and LetGo clears it
+// (0x71AC0E). It is only written on the plain Fire branch though, and the first LetGo of
+// a helper chain clears it while other instances may still hold the target, so it is used
+// as a fast path only. The authoritative answer is the engine's own instance list, which
+// Phobos already walks elsewhere for Temporal cleanup.
 //
-// With more than one Temporal warp on the same target the engine chains the extra
-// instances as helpers and leaves TemporalTargetingMe pointing at the first one, so
-// the verdict comes from the warp the engine treats as the target's own.
+// Layout of the two classes is asserted below, because this reads engine fields by hand.
+static_assert(offsetof(TechnoClass, BeingWarpedOut) == 0x270, "TechnoClass::BeingWarpedOut moved");
+static_assert(offsetof(TechnoClass, TemporalTargetingMe) == 0x278, "TechnoClass::TemporalTargetingMe moved");
+static_assert(offsetof(TemporalClass, Owner) == 0x24, "TemporalClass::Owner moved");
+static_assert(offsetof(TemporalClass, Target) == 0x28, "TemporalClass::Target moved");
+
 WarheadTypeClass* WarheadTypeExt::GetFreezeSourceWarhead(TechnoClass* pTarget)
 {
-	if (!pTarget)
+	if (!pTarget || !pTarget->BeingWarpedOut)
 		return nullptr;
 
-	const auto pTemporal = pTarget->TemporalTargetingMe;
+	// Only a warp that is holding *this* target counts, and only its owner can say which
+	// weapon delivered it - see TechnoExt::GetTemporalWarpWeapon.
+	auto const sourceOf = [pTarget](TemporalClass* pTemporal) -> WarheadTypeClass*
+	{
+		if (!pTemporal || pTemporal->Target != pTarget || !pTemporal->Owner)
+			return nullptr;
 
-	if (!pTemporal)
-		return nullptr;
+		const auto pWeapon = TechnoExt::GetTemporalWarpWeapon(pTemporal->Owner);
+		return pWeapon ? pWeapon->Warhead : nullptr;
+	};
 
-	const auto pOwner = pTemporal->Owner;
+	if (const auto pWarhead = sourceOf(pTarget->TemporalTargetingMe))
+		return pWarhead;
 
-	if (!pOwner)
-		return nullptr;
+	for (const auto pTemporal : TemporalClass::Array)
+	{
+		if (const auto pWarhead = sourceOf(pTemporal))
+			return pWarhead;
+	}
 
-	const auto pWeapon = TechnoExt::GetTemporalWarpWeapon(pOwner);
-
-	return pWeapon ? pWeapon->Warhead : nullptr;
+	return nullptr;
 }
 
 bool WarheadTypeExt::AllowsDamageWhileFrozen(TechnoClass* pTarget)
 {
-	if (const auto pWarhead = GetFreezeSourceWarhead(pTarget))
-		return WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowDamage;
-
-	return false;
+	const auto pWarhead = GetFreezeSourceWarhead(pTarget);
+	const bool allowed = pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowDamage;
+	// Diagnostic: only ever printed for a unit that is actually being warped out.
+	Debug::Log("[Temporal] AllowDamage: target=%s warpedOut=%d src=%s allowed=%d\n",
+		pTarget ? pTarget->GetTechnoType()->ID : "<null>", pTarget ? pTarget->BeingWarpedOut : -1,
+		pWarhead ? pWarhead->ID : "<none>", allowed);
+	return allowed;
 }
 
 bool WarheadTypeExt::AllowsEffectsWhileFrozen(TechnoClass* pTarget)
 {
-	if (const auto pWarhead = GetFreezeSourceWarhead(pTarget))
-		return WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowAttachEffects;
-
-	return false;
+	const auto pWarhead = GetFreezeSourceWarhead(pTarget);
+	const bool allowed = pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowAttachEffects;
+	Debug::Log("[Temporal] AllowEffects: target=%s warpedOut=%d src=%s allowed=%d\n",
+		pTarget ? pTarget->GetTechnoType()->ID : "<null>", pTarget ? pTarget->BeingWarpedOut : -1,
+		pWarhead ? pWarhead->ID : "<none>", allowed);
+	return allowed;
 }
 
 void WarheadTypeExt::DetonateAt(WarheadTypeClass* pThis, AbstractClass* pTarget, TechnoClass* pOwner, int damage, HouseClass* pFiringHouse)
@@ -240,6 +257,7 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Temporal_AllowAttachEffects.Read(exINI, pSection, "Temporal.AllowAttachEffects");
 	this->Temporal_Duration.Read(exINI, pSection, "Temporal.Duration");
 	this->Temporal_DamageMode.Read(exINI, pSection, "Temporal.DamageMode");
+	this->Temporal_Interval.Read(exINI, pSection, "Temporal.Interval");
 
 	// Crits
 	this->Crit_Chance.Read(exINI, pSection, "Crit.Chance");
@@ -667,6 +685,7 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->Temporal_AllowAttachEffects)
 		.Process(this->Temporal_Duration)
 		.Process(this->Temporal_DamageMode)
+		.Process(this->Temporal_Interval)
 
 		.Process(this->Crit_Chance)
 		.Process(this->Crit_ApplyChancePerTarget)

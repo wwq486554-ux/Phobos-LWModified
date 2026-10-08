@@ -2221,6 +2221,7 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 	record.Active = true;
 	record.TargetID = pTarget->UniqueID;
 	record.Duration = duration;
+	record.Interval = std::max(0, pWHExt->Temporal_Interval.Get());
 	record.TickRof = std::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier));
 	record.Total = total;
 	record.Paid = 0;
@@ -2295,14 +2296,18 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 
 	++record.Elapsed;
 
-	const bool finished = record.Elapsed >= record.Duration;
 	bool lethal = false;
 
-	if (finished || (record.Mode == TemporalDamageMode::Continuous && record.TickTimer.Expired()))
+	// Damage accrues during the first Temporal.Duration frames only. Once that is over the
+	// warp keeps holding the target for Temporal.Interval more frames, which is what makes the
+	// caster unable to start the next freeze (the engine refuses to fire at the unit it is
+	// already warping), and then it is let go.
+	const bool damageDone = record.Elapsed >= record.Duration;
+	const bool released = record.Elapsed >= record.Duration + record.Interval;
+
+	if (!damageDone && record.Mode == TemporalDamageMode::Continuous && record.TickTimer.Expired())
 	{
-		const int due = finished
-			? record.Total
-			: static_cast<int>(static_cast<long long>(record.Total) * record.Elapsed / record.Duration);
+		const int due = static_cast<int>(static_cast<long long>(record.Total) * record.Elapsed / record.Duration);
 		const int owed = due - record.Paid;
 
 		if (owed > 0)
@@ -2311,28 +2316,40 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 			record.Paid = due;
 		}
 
-		if (finished)
+		record.TickTimer.Start(record.TickRof);
+	}
+	else if (damageDone && record.Paid < record.Total)
+	{
+		// Last payment, once, for both modes: whatever the ticks have not covered yet.
+		const int owed = record.Total - record.Paid;
+
+		if (owed > 0)
 		{
-			Debug::Log("[Temporal] Advance: duration reached (elapsed=%d paid=%d lethal=%d hp=%d)\n",
-				record.Elapsed, record.Paid, lethal, pTarget->Health);
-			record.Active = false;
-			record.Warhead = nullptr;
-			record.TickTimer.Stop();
+			lethal = PayTemporalFreeze(this, pTarget, pTemporal->Owner, owed);
+			record.Paid = record.Total;
 		}
-		else
-		{
-			record.TickTimer.Start(record.TickRof);
-		}
+
+		Debug::Log("[Temporal] Advance: damage phase over (elapsed=%d paid=%d lethal=%d hp=%d interval=%d)\n",
+			record.Elapsed, record.Paid, lethal, pTarget->Health, record.Interval);
 	}
 
 	if (lethal)
 		return TemporalFreezeFrame::Erase;
 
-	if (finished && pTemporal->Target == pTarget)
+	if (released)
 	{
-		// The freeze is over and the target survived what it owed: hand it back, exactly the
-		// way the engine's own life timer expiry does (LetGo, then straight out of Update).
-		pTemporal->LetGo();
+		Debug::Log("[Temporal] Advance: released (elapsed=%d hp=%d alive=%d)\n",
+			record.Elapsed, pTarget->Health, pTarget->IsAlive);
+		record.Active = false;
+		record.Warhead = nullptr;
+		record.TickTimer.Stop();
+
+		if (pTemporal->Target == pTarget)
+		{
+			// Hand the target back exactly the way the engine's own life timer expiry does
+			// (LetGo, then straight out of Update).
+			pTemporal->LetGo();
+		}
 	}
 
 	return TemporalFreezeFrame::KeepAlive;
@@ -2355,6 +2372,7 @@ bool TemporalFreezeInstance::Serialize(T& stm)
 		.Process(this->Active)
 		.Process(this->TargetID)
 		.Process(this->Duration)
+		.Process(this->Interval)
 		.Process(this->TickRof)
 		.Process(this->Total)
 		.Process(this->Paid)

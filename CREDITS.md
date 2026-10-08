@@ -955,4 +955,5 @@ This page lists all the individual contributions to the project by their author.
   - Guided spawned missiles (`Missile.Homing`) now aim at a predicted intercept point instead of the target's current position, with `LeadFactor` / `MaxLeadTime` keys, and their air proximity fuze tests the flown segment so a fast missile can no longer cross it without detonating
   - `Temporal.AllowDamage` / `Temporal.AllowAttachEffects`: a warhead that freezes a unit can let it keep taking damage and keep receiving warhead effects while it is frozen, instead of the vanilla total immunity
   - `Temporal.Duration` / `Temporal.DamageMode`: a Temporal warp can be held for a fixed number of frames and pay the target the damage it owes for the time it spent frozen (at vanilla's own erase rate), instead of erasing it when the engine's counter runs out
+  - `Temporal.Interval` gives such a freeze a cooldown by holding the beam on the target for a while after the damage phase
   - Corrected several hook sizes that ended in the middle of a game instruction and made Syringe rebuild a truncated instruction sequence (the `faulty return 0 hook` warnings)

@@ -81,6 +81,12 @@ public:
 	Valueable<int> Temporal_Duration;
 	Valueable<TemporalDamageMode> Temporal_DamageMode;
 
+	// Frames the caster keeps holding the target after the damage phase is over. The engine's
+	// own "cannot fire at the unit I am warping" gate is what turns this into a cooldown: the
+	// caster cannot start the next freeze until it lets go, and it only lets go when this runs
+	// out. 0 - the default - releases the target as soon as Temporal.Duration has elapsed.
+	Valueable<int> Temporal_Interval;
+
 	Valueable<double> Crit_Chance;
 	Nullable<bool> Crit_ApplyChancePerTarget;
 	Valueable<int> Crit_ExtraDamage;
@@ -378,6 +384,7 @@ public:
 		, Temporal_AllowAttachEffects { false }
 		, Temporal_Duration { 0 }
 		, Temporal_DamageMode { TemporalDamageMode::Continuous }
+		, Temporal_Interval { 0 }
 
 		, Crit_Chance { 0.0 }
 		, Crit_ApplyChancePerTarget {}

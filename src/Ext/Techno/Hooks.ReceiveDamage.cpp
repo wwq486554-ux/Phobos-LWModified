@@ -228,6 +228,37 @@ DEFINE_HOOK(0x701900, TechnoClass_ReceiveDamage_Shield, 0x6)
 			pThis->EstimatedHealth = 1;
 			ReceiveDamageTemp::SkipLowDamageCheck = true;
 		}
+
+		// Temporal.ZeroHealthAction / Temporal.KilledByOthers: a frozen target that would die
+		// to *someone else's* hit. Which of the two answers applies is decided by the warhead
+		// holding the warp, not by the one that just hit it. Both of them keep the target alive
+		// for now (1 HP) and record what has to happen to it instead of letting the ordinary
+		// death path run - a wreck and a DeathWeapon are exactly what the warp erase avoids.
+		if (!TemporalTemp::PayingFreezeDamage && pThis->BeingWarpedOut
+			&& pThis->Health > 0 && damage > 0 && damage >= pThis->Health)
+		{
+			if (const auto pFreezeWH = WarheadTypeExt::GetFreezeSourceWarhead(pThis))
+			{
+				const auto pFreezeWHExt = WarheadTypeExt::Fetch(pFreezeWH);
+
+				if (pFreezeWHExt->Temporal_ZeroHealthAction == TemporalZeroHealthAction::Linger)
+				{
+					damage = 0;
+					pThis->Health = 1;
+					pThis->EstimatedHealth = 1;
+					pExt->TemporalLingerSaved = true;
+					ReceiveDamageTemp::SkipLowDamageCheck = true;
+				}
+				else if (pFreezeWHExt->Temporal_KilledByOthers == TemporalKilledByOthers::Erase)
+				{
+					damage = 0;
+					pThis->Health = 1;
+					pThis->EstimatedHealth = 1;
+					pExt->TemporalErasePending = true;
+					ReceiveDamageTemp::SkipLowDamageCheck = true;
+				}
+			}
+		}
 	}
 
 	// The damage a fixed-duration Temporal freeze (Temporal.Duration) pays out must not run the
@@ -247,8 +278,14 @@ DEFINE_HOOK(0x701900, TechnoClass_ReceiveDamage_Shield, 0x6)
 		damage = 0;
 		pThis->Health = 1;
 		pThis->EstimatedHealth = 1;
-		TemporalTemp::FreezeDamageWasLethal = true;
 		ReceiveDamageTemp::SkipLowDamageCheck = true;
+
+		// Linger: the freeze itself is not allowed to finish the target off either. It sits at
+		// 1 HP until the freeze is over, and UpdateTemporalFreeze erases it then.
+		if (WarheadTypeExt::Fetch(args->WH)->Temporal_ZeroHealthAction == TemporalZeroHealthAction::Linger)
+			TechnoExt::Fetch(pThis)->TemporalLingerSaved = true;
+		else
+			TemporalTemp::FreezeDamageWasLethal = true;
 	}
 
 	return 0;

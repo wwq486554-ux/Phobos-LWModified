@@ -81,11 +81,18 @@ public:
 	Valueable<int> Temporal_Duration;
 	Valueable<TemporalDamageMode> Temporal_DamageMode;
 
-	// Frames the caster keeps holding the target after the damage phase is over. The engine's
-	// own "cannot fire at the unit I am warping" gate is what turns this into a cooldown: the
-	// caster cannot start the next freeze until it lets go, and it only lets go when this runs
-	// out. 0 - the default - releases the target as soon as Temporal.Duration has elapsed.
+	// The caster's cooldown: the target is released as soon as Temporal.Duration has elapsed,
+	// and this many frames are added to the caster's rearm timer so it cannot start the next
+	// freeze before they pass. 0 - the default - adds nothing.
 	Valueable<int> Temporal_Interval;
+
+	// What happens while the target's health is used up during the freeze, and how a lethal hit
+	// from someone else resolves. Erase/Normal (the defaults) keep the behaviour of a freeze
+	// that erases the target the moment the damage lands, and lets outsiders kill it the
+	// ordinary way. Linger makes the target unkillable for the length of the freeze and erases
+	// it once the freeze is over; it makes KilledByOthers meaningless.
+	Valueable<TemporalZeroHealthAction> Temporal_ZeroHealthAction;
+	Valueable<TemporalKilledByOthers> Temporal_KilledByOthers;
 
 	Valueable<double> Crit_Chance;
 	Nullable<bool> Crit_ApplyChancePerTarget;
@@ -385,6 +392,8 @@ public:
 		, Temporal_Duration { 0 }
 		, Temporal_DamageMode { TemporalDamageMode::Continuous }
 		, Temporal_Interval { 0 }
+		, Temporal_ZeroHealthAction { TemporalZeroHealthAction::Erase }
+		, Temporal_KilledByOthers { TemporalKilledByOthers::Normal }
 
 		, Crit_Chance { 0.0 }
 		, Crit_ApplyChancePerTarget {}

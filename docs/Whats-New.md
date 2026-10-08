@@ -733,6 +733,7 @@ HideShakeEffects=false           ; boolean
   - `Temporal.Duration` holds a Temporal warp for a fixed number of frames and deals the damage the target owes for the time it spent frozen, at the same erase rate vanilla uses - a duration equal to vanilla's erase duration costs the target its full health. `Temporal.DamageMode` pays it either as a tick every `ROF` frames or in one hit at the end.
   - A freeze that is cut short only pays for the time it actually lasted, and a payment that would be lethal removes the target through the engine's warp erase instead of the normal death path, so there is no wreck and no `DeathWeapon`.
   - `Temporal.Interval` puts the caster on a cooldown of that many frames after a freeze ends: the target is released as soon as `Temporal.Duration` is over, and the caster's rearm timer is pushed out so it cannot start the next freeze early.
+  - `Temporal.ZeroHealthAction=linger` makes a freeze unable to finish its target off - it sits at 1 HP until the freeze is over and is erased then - and `Temporal.KilledByOthers=erase` resolves a lethal hit from someone else as a warp erase instead of letting the target die the ordinary way.
 
 #### Vanilla fixes:
 - [Armed engineers can attack](Fixed-or-Improved-Logics.md#armed-engineers-can-attack) (by laowang)

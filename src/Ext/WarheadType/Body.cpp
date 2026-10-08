@@ -251,6 +251,23 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Temporal_Duration.Read(exINI, pSection, "Temporal.Duration");
 	this->Temporal_DamageMode.Read(exINI, pSection, "Temporal.DamageMode");
 	this->Temporal_Interval.Read(exINI, pSection, "Temporal.Interval");
+	this->Temporal_ZeroHealthAction.Read(exINI, pSection, "Temporal.ZeroHealthAction");
+	this->Temporal_KilledByOthers.Read(exINI, pSection, "Temporal.KilledByOthers");
+
+	if (this->Temporal_ZeroHealthAction == TemporalZeroHealthAction::Linger)
+	{
+		if (this->Temporal_KilledByOthers != TemporalKilledByOthers::Normal)
+		{
+			Debug::Log("[Developer warning][%s] Temporal.KilledByOthers is ignored while "
+				"Temporal.ZeroHealthAction=linger - nothing kills the target before the freeze ends.\n", pSection);
+		}
+
+		if (this->Temporal_DamageMode == TemporalDamageMode::End)
+		{
+			Debug::Log("[Developer warning][%s] Temporal.DamageMode=end leaves Temporal.ZeroHealthAction=linger "
+				"nothing to hold back: the damage is paid when the freeze ends, so the target is erased then.\n", pSection);
+		}
+	}
 
 	// Crits
 	this->Crit_Chance.Read(exINI, pSection, "Crit.Chance");
@@ -679,6 +696,8 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->Temporal_Duration)
 		.Process(this->Temporal_DamageMode)
 		.Process(this->Temporal_Interval)
+		.Process(this->Temporal_ZeroHealthAction)
+		.Process(this->Temporal_KilledByOthers)
 
 		.Process(this->Crit_Chance)
 		.Process(this->Crit_ApplyChancePerTarget)

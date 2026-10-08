@@ -240,6 +240,15 @@ public:
 	// The "one-shot freeze" this techno is currently applying to someone, if any.
 	TemporalFreezeInstance TemporalFreeze;
 
+	// --- Temporal.ZeroHealthAction / KilledByOthers (written on the *victim*) ---
+	// The victim's health was used up while a Linger freeze held it: it sits at 1 HP and has
+	// to be erased when that freeze ends instead of being released.
+	bool TemporalLingerSaved;
+	// An outsider's lethal hit on this frozen victim has to resolve as a warp erase rather than
+	// as a death. The warp that holds the victim picks this up on its next update - the victim
+	// itself drives that update every frame - and removes it through the engine's own erase.
+	bool TemporalErasePending;
+
 	// Registers the freeze a Temporal detonation just started. Called from the tail of
 	// TemporalClass::Fire; does nothing unless the warhead sets Temporal.Duration.
 	void BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget);
@@ -314,6 +323,8 @@ public:
 		, Sweeps {}
 		, SweepFireCooldownTimer {}
 		, TemporalFreeze {}
+		, TemporalLingerSaved { false }
+		, TemporalErasePending { false }
 	{ }
 
 	void OnEarlyUpdate();

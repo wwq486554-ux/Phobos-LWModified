@@ -1967,6 +1967,8 @@ void TechnoExt::Serialize(T& Stm)
 		.Process(this->Sweeps)
 		.Process(this->SweepFireCooldownTimer)
 		.Process(this->TemporalFreeze)
+		.Process(this->TemporalLingerSaved)
+		.Process(this->TemporalErasePending)
 		;
 }
 
@@ -2256,6 +2258,21 @@ void TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
 
 	// The freeze ended before its time was up (the caster stopped, walked away or died), so the
 	// target is free again - and the caster still owes the interval before it may start another.
+	//
+	// Whatever the victim still owed this freeze is dropped with it. Both notes below are only
+	// ever carried out by the warp that is holding the victim, and that warp is being let go
+	// right now: the erase cannot be issued from here, and the engine's own erase belongs to
+	// TemporalClass::ProcessTimeWarp. A victim that was kept at 1 HP by Temporal.ZeroHealthAction
+	// =linger therefore stays alive when the caster breaks off early instead of being erased.
+	if (pTarget)
+	{
+		if (const auto pTargetExt = TechnoExt::TryFetch(pTarget))
+		{
+			pTargetExt->TemporalLingerSaved = false;
+			pTargetExt->TemporalErasePending = false;
+		}
+	}
+
 	StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
 	ResetTemporalFreeze(record);
 }
@@ -2322,6 +2339,12 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 	{
 		// The target is erased, which also ends this freeze - the caster goes on cooldown just
 		// the same, otherwise it would start the next freeze the very next frame.
+		if (const auto pTargetExt = TechnoExt::TryFetch(pTarget))
+		{
+			pTargetExt->TemporalLingerSaved = false;
+			pTargetExt->TemporalErasePending = false;
+		}
+
 		StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
 		ResetTemporalFreeze(record);
 
@@ -2330,6 +2353,19 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 
 	if (damageDone)
 	{
+		// Temporal.ZeroHealthAction=linger: this freeze spent the target's health but was not
+		// allowed to finish it off, so the target leaves through the warp erase now rather than
+		// being released at 1 HP.
+		if (const auto pTargetExt = TechnoExt::TryFetch(pTarget); pTargetExt && pTargetExt->TemporalLingerSaved)
+		{
+			pTargetExt->TemporalLingerSaved = false;
+			pTargetExt->TemporalErasePending = false;
+			StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
+			ResetTemporalFreeze(record);
+
+			return TemporalFreezeFrame::Erase;
+		}
+
 		ResetTemporalFreeze(record);
 
 		if (pTemporal->Target == pTarget)

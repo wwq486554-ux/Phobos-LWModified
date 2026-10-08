@@ -490,3 +490,24 @@ enum class TemporalDamageMode : unsigned char
 	End = 0,       // everything at once when the freeze ends
 	Continuous = 1 // a tick every ROF frames while it lasts
 };
+
+// Temporal.ZeroHealthAction - what happens when a frozen target's health is used up while the
+// warp is still holding it. Erase is the vanilla-like answer (the target leaves through the
+// warp erase as soon as the damage lands); Linger keeps it alive at 1 HP for as long as the
+// freeze lasts and erases it when the freeze is over. Only meaningful for the damage the
+// freeze itself pays out and for anything else that hits the target while it is held.
+enum class TemporalZeroHealthAction : unsigned char
+{
+	Erase = 0,  // leaves through the warp erase the moment its health runs out
+	Linger = 1  // nothing can kill it until the freeze ends; erased then
+};
+
+// Temporal.KilledByOthers - how a *lethal hit from someone else* on a frozen target resolves.
+// Ignored while ZeroHealthAction is Linger, which already answers the question: nothing kills
+// the target until the freeze ends. Normal walks the ordinary death path (wreck, DeathWeapon),
+// Erase hands the target to the warp erase instead.
+enum class TemporalKilledByOthers : unsigned char
+{
+	Normal = 0,
+	Erase = 1
+};

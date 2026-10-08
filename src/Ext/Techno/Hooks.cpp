@@ -128,6 +128,19 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 		const auto pExt = TechnoExt::Fetch(pTarget);
 		pExt->UpdateTemporal();
 
+		// Temporal.KilledByOthers=erase: an outsider's lethal hit on this frozen target was
+		// recorded instead of being allowed to kill it, and the warp erases it now. This is
+		// driven from the victim's own side of the warp on purpose - that is the update the
+		// victim's own AI runs every frame - so the erase happens whether or not the caster is
+		// still around, and the notes are dead once the warp lets go (see EndTemporalFreeze).
+		if (pExt->TemporalErasePending)
+		{
+			pExt->TemporalErasePending = false;
+			pExt->TemporalLingerSaved = false;
+
+			return 0x71A895;
+		}
+
 		// Temporal.Duration: a warp held for a fixed number of frames that pays the damage
 		// the target owes for that time instead of erasing it when WarpRemaining runs out.
 		// While one is running the vanilla erase decision below must not be taken.

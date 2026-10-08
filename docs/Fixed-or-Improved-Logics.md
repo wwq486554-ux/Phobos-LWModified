@@ -3066,14 +3066,24 @@ Temporal.AllowAttachEffects=false ; boolean
 - The damage a freeze deals is never gated by `Temporal.AllowDamage`, which only says whether *outside* weapons may hurt the frozen unit.
 - `Temporal.Interval` is the caster's cooldown between one freeze and the next. The target is released the moment `Temporal.Duration` is over - the beam does not stay on it - and the wait is put on the caster instead: its rearm timer is pushed out by that many frames, so the engine refuses to fire again until the interval has passed. `0`, the default, adds nothing, and the caster is held only by its own `ROF` as usual.
   - A freeze that ends early (the caster lets go, walks away or dies) or by erasing the target starts the same cooldown.
+- `Temporal.ZeroHealthAction` decides what happens when the target's health is used up while the warp still holds it:
+  - `erase`, the default, is the vanilla-like answer: the payment is clamped so that the target cannot die the ordinary way, and the warp erases it in the same frame. No wreck, no `DeathWeapon`.
+  - `linger` makes the freeze unable to finish the target off: the health it spends leaves the target at 1 HP, and so does any hit from someone else. The target is erased when the freeze ends normally (`Temporal.Duration` runs out) instead of being released.
+    - If the caster breaks off early - it stops, walks away or dies - the target is released at 1 HP. Erasing it there is not possible from where the warp is let go: the erase is the engine's, issued by the warp's own per-frame update, and that update is exactly what is ending. `linger` therefore trades "unkillable until the freeze is over" for "survives at 1 HP if the caster is interrupted".
+- `Temporal.KilledByOthers` covers a *lethal hit from someone else* on a frozen target (which needs `Temporal.AllowDamage` to land at all):
+  - `normal`, the default, lets the target die the ordinary way: wreck, `DeathWeapon`, crew.
+  - `erase` keeps it alive for the moment the hit lands and hands it to the warp erase instead.
+  - It is ignored while `ZeroHealthAction=linger`, which already answers the question - nothing kills the target before the freeze ends; a developer warning is printed for the combination.
 - `Temporal.Duration=0`, the default, leaves the vanilla behaviour intact down to the instruction.
 
 In `rulesmd.ini`:
 ```ini
-[SOMEWARHEAD]                   ; WarheadType
-Temporal.Duration=0             ; integer, frames
-Temporal.DamageMode=continuous  ; end or continuous
-Temporal.Interval=0             ; integer, frames
+[SOMEWARHEAD]                     ; WarheadType
+Temporal.Duration=0               ; integer, frames
+Temporal.DamageMode=continuous    ; end or continuous
+Temporal.Interval=0               ; integer, frames
+Temporal.ZeroHealthAction=erase   ; erase or linger
+Temporal.KilledByOthers=normal    ; normal or erase
 ```
 
 ### Allowing damage dealt to firer

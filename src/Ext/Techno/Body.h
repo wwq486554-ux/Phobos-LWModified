@@ -259,6 +259,9 @@ public:
 	// Advances the freeze by one frame. Returns whether the engine should still erase the
 	// target, keep it warped, or whether this techno has nothing to say about it.
 	TemporalFreezeFrame UpdateTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget);
+	// Drops this techno's freeze without paying anything, because something else is ending it -
+	// the target is being erased by Temporal.KilledByOthers, for one. The cooldown still starts.
+	void AbandonTemporalFreeze(TechnoClass* pTarget);
 	// The weapon whose Temporal warhead is holding this techno's current warp: the one that
 	// actually delivered it when that is known, otherwise the engine's own selection.
 	static WeaponTypeClass* GetTemporalWarpWeapon(TechnoClass* pOwner);

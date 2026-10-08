@@ -2230,6 +2230,17 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 	record.TickTimer.Start(record.TickRof);
 }
 
+void TechnoExt::AbandonTemporalFreeze(TechnoClass* pTarget)
+{
+	auto& record = this->TemporalFreeze;
+
+	if (!record.Active || (pTarget && pTarget->UniqueID != record.TargetID))
+		return;
+
+	StartTemporalFreezeCooldown(this->OwnerObject(), record.Interval);
+	ResetTemporalFreeze(record);
+}
+
 void TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
 {
 	auto& record = this->TemporalFreeze;

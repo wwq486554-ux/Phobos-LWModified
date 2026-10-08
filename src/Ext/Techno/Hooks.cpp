@@ -138,6 +138,12 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 			pExt->TemporalErasePending = false;
 			pExt->TemporalLingerSaved = false;
 
+			// The freeze ends here as well, so settle its record without paying anything the
+			// target may still owe: it is being erased, not damaged. The caster keeps its
+			// cooldown, exactly as it would on any other way out of a freeze.
+			if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
+				pOwnerExt->AbandonTemporalFreeze(pTarget);
+
 			return 0x71A895;
 		}
 

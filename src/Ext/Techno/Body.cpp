@@ -2159,6 +2159,31 @@ static bool PayTemporalFreeze(TechnoExt* pExt, TechnoClass* pTarget, TechnoClass
 	return lethal;
 }
 
+// Clears a freeze record without paying anything or touching the caster's cooldown: the
+// scalar fields are kept so that the last diagnostic line can still report them.
+static void ResetTemporalFreeze(TemporalFreezeInstance& record)
+{
+	record.Active = false;
+	record.Warhead = nullptr;
+	record.TickTimer.Stop();
+}
+
+// Temporal.Interval: the gap between one freeze ending and the next one starting. The target is
+// released as soon as Temporal.Duration is over, so the wait has to sit on the *caster* instead.
+// It is added to the engine's own "weapon is busy" timer (TechnoClass RearmTimer, +0x2EC, the
+// same one SweepFire fills in at 0x6FF29E): the engine refuses to fire while that runs, which is
+// what keeps the next freeze from starting early, and the cursor and the AI see the same thing.
+// Using the engine's timer also means the cooldown is saved and loaded for free. Only ever
+// extended - a longer vanilla reload is left alone.
+static void StartTemporalFreezeCooldown(TechnoClass* pOwner, int frames)
+{
+	if (!pOwner || frames <= 0)
+		return;
+
+	if (pOwner->RearmTimer.GetTimeLeft() < frames)
+		pOwner->RearmTimer.Start(frames);
+}
+
 void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
 {
 	// Diagnostic: one line per Temporal detonation, so a run that does nothing still says why.
@@ -2257,10 +2282,12 @@ void TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
 		}
 	}
 
-	record.Active = false;
-	record.Warhead = nullptr;
-	record.TickTimer.Stop();
-	Debug::Log("[Temporal] End: settled after %d/%d frames (paid=%d)\n", record.Elapsed, record.Duration, record.Paid);
+	// The freeze ended before its time was up (the caster stopped, walked away or died), so the
+	// target is free again - and the caster still owes the interval before it may start another.
+	StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
+	ResetTemporalFreeze(record);
+	Debug::Log("[Temporal] End: settled after %d/%d frames (paid=%d interval=%d)\n",
+		record.Elapsed, record.Duration, record.Paid, record.Interval);
 }
 
 TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
@@ -2298,12 +2325,10 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 
 	bool lethal = false;
 
-	// Damage accrues during the first Temporal.Duration frames only. Once that is over the
-	// warp keeps holding the target for Temporal.Interval more frames, which is what makes the
-	// caster unable to start the next freeze (the engine refuses to fire at the unit it is
-	// already warping), and then it is let go.
+	// Damage accrues during the first Temporal.Duration frames only; the moment those are over
+	// the target is handed back (see below). Temporal.Interval is not part of the freeze: it is
+	// the caster's cooldown until the next one may start.
 	const bool damageDone = record.Elapsed >= record.Duration;
-	const bool released = record.Elapsed >= record.Duration + record.Interval;
 
 	if (!damageDone && record.Mode == TemporalDamageMode::Continuous && record.TickTimer.Expired())
 	{
@@ -2334,22 +2359,33 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 	}
 
 	if (lethal)
-		return TemporalFreezeFrame::Erase;
-
-	if (released)
 	{
-		Debug::Log("[Temporal] Advance: released (elapsed=%d hp=%d alive=%d)\n",
-			record.Elapsed, pTarget->Health, pTarget->IsAlive);
-		record.Active = false;
-		record.Warhead = nullptr;
-		record.TickTimer.Stop();
+		// The target is erased, which also ends this freeze - the caster goes on cooldown just
+		// the same, otherwise it would start the next freeze the very next frame.
+		StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
+		ResetTemporalFreeze(record);
+
+		return TemporalFreezeFrame::Erase;
+	}
+
+	if (damageDone)
+	{
+		Debug::Log("[Temporal] Advance: released (elapsed=%d hp=%d alive=%d interval=%d)\n",
+			record.Elapsed, pTarget->Health, pTarget->IsAlive, record.Interval);
+
+		ResetTemporalFreeze(record);
 
 		if (pTemporal->Target == pTarget)
 		{
 			// Hand the target back exactly the way the engine's own life timer expiry does
-			// (LetGo, then straight out of Update).
+			// (LetGo, then straight out of Update). This runs after the record is cleared, so
+			// the LetGo hook below does not settle the freeze a second time.
 			pTemporal->LetGo();
 		}
+
+		StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
+
+		return TemporalFreezeFrame::KeepAlive;
 	}
 
 	return TemporalFreezeFrame::KeepAlive;

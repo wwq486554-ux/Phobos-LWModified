@@ -142,30 +142,18 @@ WarheadTypeClass* WarheadTypeExt::GetFreezeSourceWarhead(TechnoClass* pTarget)
 	return nullptr;
 }
 
-bool WarheadTypeExt::AllowsDamageWhileFrozen(TechnoClass* pTarget, bool bLogAlways)
+bool WarheadTypeExt::AllowsDamageWhileFrozen(TechnoClass* pTarget)
 {
 	const auto pWarhead = GetFreezeSourceWarhead(pTarget);
-	const bool allowed = pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowDamage;
 
-	// Diagnostic: only ever printed for a unit that is actually being warped out.
-	if (bLogAlways || allowed)
-	{
-		Debug::Log("[Temporal] AllowDamage: target=%s warpedOut=%d src=%s allowed=%d\n",
-			pTarget ? pTarget->GetTechnoType()->ID : "<null>", pTarget ? pTarget->BeingWarpedOut : -1,
-			pWarhead ? pWarhead->ID : "<none>", allowed);
-	}
-
-	return allowed;
+	return pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowDamage;
 }
 
 bool WarheadTypeExt::AllowsEffectsWhileFrozen(TechnoClass* pTarget)
 {
 	const auto pWarhead = GetFreezeSourceWarhead(pTarget);
-	const bool allowed = pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowAttachEffects;
-	Debug::Log("[Temporal] AllowEffects: target=%s warpedOut=%d src=%s allowed=%d\n",
-		pTarget ? pTarget->GetTechnoType()->ID : "<null>", pTarget ? pTarget->BeingWarpedOut : -1,
-		pWarhead ? pWarhead->ID : "<none>", allowed);
-	return allowed;
+
+	return pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowAttachEffects;
 }
 
 void WarheadTypeExt::DetonateAt(WarheadTypeClass* pThis, AbstractClass* pTarget, TechnoClass* pOwner, int damage, HouseClass* pFiringHouse)

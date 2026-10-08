@@ -496,7 +496,7 @@ DEFINE_HOOK(0x6FC5F2, TechnoClass_GetFireError_TemporalAllowDamage, 0x6)
 
 	if (const auto pTargetTechno = abstract_cast<TechnoClass*>(pTarget))
 	{
-		if (WarheadTypeExt::AllowsDamageWhileFrozen(pTargetTechno, false))
+		if (WarheadTypeExt::AllowsDamageWhileFrozen(pTargetTechno))
 			return ContinueCheck;
 	}
 
@@ -516,7 +516,7 @@ DEFINE_HOOK(0x7005CD, TechnoClass_MouseOverObject_TemporalAllowDamage, 0x6)
 
 	if (const auto pTechno = abstract_cast<TechnoClass*>(pObject))
 	{
-		if (pTechno->BeingWarpedOut && !WarheadTypeExt::AllowsDamageWhileFrozen(pTechno, false))
+		if (pTechno->BeingWarpedOut && !WarheadTypeExt::AllowsDamageWhileFrozen(pTechno))
 			return None;
 	}
 

@@ -2144,7 +2144,6 @@ static bool PayTemporalFreeze(TechnoExt* pExt, TechnoClass* pTarget, TechnoClass
 	// whether *outside* weapons may hurt the frozen unit), so it is dealt as damage that
 	// ignores defenses. That also skips shields, which is what the vanilla erase does.
 	int damage = amount;
-	const int hpBefore = pTarget->Health;
 
 	TemporalTemp::PayingFreezeDamage = true;
 	TemporalTemp::FreezeDamageWasLethal = false;
@@ -2153,14 +2152,11 @@ static bool PayTemporalFreeze(TechnoExt* pExt, TechnoClass* pTarget, TechnoClass
 	TemporalTemp::PayingFreezeDamage = false;
 	TemporalTemp::FreezeDamageWasLethal = false;
 
-	Debug::Log("[Temporal] Pay: amount=%d (left=%d) hp %d -> %d lethal=%d alive=%d\n",
-		amount, damage, hpBefore, pTarget->Health, lethal, pTarget->IsAlive);
-
 	return lethal;
 }
 
-// Clears a freeze record without paying anything or touching the caster's cooldown: the
-// scalar fields are kept so that the last diagnostic line can still report them.
+// Clears a freeze record without paying anything or touching the caster's cooldown. The
+// scalar fields are left as they were - only their presence in the record matters.
 static void ResetTemporalFreeze(TemporalFreezeInstance& record)
 {
 	record.Active = false;
@@ -2186,22 +2182,14 @@ static void StartTemporalFreezeCooldown(TechnoClass* pOwner, int frames)
 
 void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
 {
-	// Diagnostic: one line per Temporal detonation, so a run that does nothing still says why.
 	if (!pTemporal || !pTarget || !pTemporal->Owner)
-	{
-		Debug::Log("[Temporal] Begin: skipped (temporal=%p target=%p)\n", pTemporal, pTarget);
 		return;
-	}
 
 	const auto pOwner = pTemporal->Owner;
 	const auto pWeapon = GetTemporalWarpWeapon(pOwner);
 
 	if (!pWeapon)
-	{
-		Debug::Log("[Temporal] Begin: no Temporal weapon for %s (recorded=%p)\n",
-			pOwner->GetTechnoType()->ID, TechnoExt::TryFetch(pOwner) ? TechnoExt::TryFetch(pOwner)->TemporalWarpWeapon : nullptr);
 		return;
-	}
 
 	const auto pWHExt = WarheadTypeExt::Fetch(pWeapon->Warhead);
 	const int duration = pWHExt->Temporal_Duration;
@@ -2209,16 +2197,9 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 	// The default, 0, leaves the vanilla warp alone: WarpRemaining decides when the target
 	// is erased and the warhead's own erase rate decides how fast.
 	if (duration <= 0)
-	{
-		Debug::Log("[Temporal] Begin: duration=0 on %s (weapon=%s) -> vanilla warp\n",
-			pWeapon->Warhead->ID, pWeapon->ID);
 		return;
-	}
 
 	const int erasePerFrame = GetFreezeErasePerFrame(pOwner, pWeapon, pTarget, pWeapon->Warhead);
-	Debug::Log("[Temporal] Begin: warhead=%s duration=%d erasePerFrame=%d target=%s hp=%d/%d armor=%d\n",
-		pWeapon->Warhead->ID, duration, erasePerFrame, pTarget->GetTechnoType()->ID,
-		pTarget->Health, pTarget->GetType()->Strength, static_cast<int>(pTarget->GetType()->Armor));
 
 	if (erasePerFrame <= 0)
 		return;
@@ -2226,23 +2207,14 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 	const long long owed = static_cast<long long>(duration) * erasePerFrame / 10;
 
 	if (owed <= 0)
-	{
-		Debug::Log("[Temporal] Begin: skipped, owed=%lld\n", owed);
 		return;
-	}
 
 	const int total = MapClass::GetTotalDamage(static_cast<int>(owed), pWeapon->Warhead, pTarget->GetType()->Armor, 0);
 
 	if (total <= 0)
-	{
-		Debug::Log("[Temporal] Begin: skipped, total=%d (owed=%lld)\n", total, owed);
 		return;
-	}
 
 	auto& record = this->TemporalFreeze;
-	Debug::Log("[Temporal] Begin: ARMED targetID=%u duration=%d total=%d tickRof=%d mode=%d\n",
-		pTarget->UniqueID, duration, total, std::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier)),
-		static_cast<int>(pWHExt->Temporal_DamageMode.Get()));
 	record.Active = true;
 	record.TargetID = pTarget->UniqueID;
 	record.Duration = duration;
@@ -2286,8 +2258,6 @@ void TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
 	// target is free again - and the caster still owes the interval before it may start another.
 	StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
 	ResetTemporalFreeze(record);
-	Debug::Log("[Temporal] End: settled after %d/%d frames (paid=%d interval=%d)\n",
-		record.Elapsed, record.Duration, record.Paid, record.Interval);
 }
 
 TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
@@ -2296,13 +2266,6 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 
 	if (!record.Active)
 		return TemporalFreezeFrame::NotHandled;
-
-	// Diagnostic: the first per-frame call after arming says whether this Temporal instance is
-	// the one the record belongs to. Silence here means the engine never updated it.
-	if (record.Elapsed == 0)
-		Debug::Log("[Temporal] Advance: entered, match=%d (temporal=%p owner=%p targetID=%u)\n",
-			(pTarget && pTarget->UniqueID == record.TargetID), pTemporal,
-			pTemporal ? pTemporal->Owner : nullptr, record.TargetID);
 
 	if (!pTemporal || !pTarget || pTarget->UniqueID != record.TargetID)
 		return TemporalFreezeFrame::NotHandled;
@@ -2353,9 +2316,6 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 			lethal = PayTemporalFreeze(this, pTarget, pTemporal->Owner, owed);
 			record.Paid = record.Total;
 		}
-
-		Debug::Log("[Temporal] Advance: damage phase over (elapsed=%d paid=%d lethal=%d hp=%d interval=%d)\n",
-			record.Elapsed, record.Paid, lethal, pTarget->Health, record.Interval);
 	}
 
 	if (lethal)
@@ -2370,9 +2330,6 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 
 	if (damageDone)
 	{
-		Debug::Log("[Temporal] Advance: released (elapsed=%d hp=%d alive=%d interval=%d)\n",
-			record.Elapsed, pTarget->Health, pTarget->IsAlive, record.Interval);
-
 		ResetTemporalFreeze(record);
 
 		if (pTemporal->Target == pTarget)

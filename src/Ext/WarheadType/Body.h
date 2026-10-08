@@ -648,10 +648,7 @@ public:
 	// the target is not being warped or the source cannot be determined. Static
 	// because every caller looks the source up from the victim, not from itself.
 	static WarheadTypeClass* GetFreezeSourceWarhead(TechnoClass* pTarget);
-	// bLogAlways keeps the diagnostic line for the low-frequency callers (the damage gate);
-	// the cursor and firing checks run per frame, so they only speak up when the key allows
-	// damage, which is the event worth seeing.
-	static bool AllowsDamageWhileFrozen(TechnoClass* pTarget, bool bLogAlways = true);
+	static bool AllowsDamageWhileFrozen(TechnoClass* pTarget);
 	static bool AllowsEffectsWhileFrozen(TechnoClass* pTarget);
 	bool EligibleForFullMapDetonation(TechnoClass* pTechno, TechnoTypeClass* pType, HouseClass* pOwner) const;
 	bool IsHealthInThreshold(TechnoClass* pTarget) const;

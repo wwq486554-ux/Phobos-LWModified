@@ -142,14 +142,19 @@ WarheadTypeClass* WarheadTypeExt::GetFreezeSourceWarhead(TechnoClass* pTarget)
 	return nullptr;
 }
 
-bool WarheadTypeExt::AllowsDamageWhileFrozen(TechnoClass* pTarget)
+bool WarheadTypeExt::AllowsDamageWhileFrozen(TechnoClass* pTarget, bool bLogAlways)
 {
 	const auto pWarhead = GetFreezeSourceWarhead(pTarget);
 	const bool allowed = pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowDamage;
+
 	// Diagnostic: only ever printed for a unit that is actually being warped out.
-	Debug::Log("[Temporal] AllowDamage: target=%s warpedOut=%d src=%s allowed=%d\n",
-		pTarget ? pTarget->GetTechnoType()->ID : "<null>", pTarget ? pTarget->BeingWarpedOut : -1,
-		pWarhead ? pWarhead->ID : "<none>", allowed);
+	if (bLogAlways || allowed)
+	{
+		Debug::Log("[Temporal] AllowDamage: target=%s warpedOut=%d src=%s allowed=%d\n",
+			pTarget ? pTarget->GetTechnoType()->ID : "<null>", pTarget ? pTarget->BeingWarpedOut : -1,
+			pWarhead ? pWarhead->ID : "<none>", allowed);
+	}
+
 	return allowed;
 }
 

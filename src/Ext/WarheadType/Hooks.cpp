@@ -473,6 +473,56 @@ DEFINE_HOOK(0x701AC6, TechnoClass_ReceiveDamage_TemporalAllowDamage, 0x6)
 	return 0;
 }
 
+// The damage layer above is not the only place vanilla protects a unit that is being warped
+// out: the shot itself is refused long before any damage is dealt, and the cursor refuses to
+// acknowledge the object at all. Both checks ask the same question - "is the target warped out
+// and is the weapon that would hit it a Temporal one?" - so both are released here by the same
+// warhead key. Without this, Temporal.AllowDamage is unreachable: no shot is ever fired.
+//
+// TechnoClass::GetFireError, the branch that runs once the target is known to be warped out.
+// Vanilla lets the shot through only for a Temporal warhead (it may join the warp's helper
+// chain) and returns FireError::ILLEGAL for everything else, which is also what
+// TechnoClass::MouseOverObject checks to decide the attack cursor. ESI = shooter, EBX = target
+// as AbstractClass, EDI = the weapon being checked.
+DEFINE_HOOK(0x6FC5F2, TechnoClass_GetFireError_TemporalAllowDamage, 0x6)
+{
+	enum { ContinueCheck = 0x6FC606, Illegal = 0x6FC86A };
+
+	GET(AbstractClass*, pTarget, EBX);
+	GET(WeaponTypeClass*, pWeapon, EDI);
+
+	if (pWeapon->Warhead && pWeapon->Warhead->Temporal)
+		return ContinueCheck;
+
+	if (const auto pTargetTechno = abstract_cast<TechnoClass*>(pTarget))
+	{
+		if (WarheadTypeExt::AllowsDamageWhileFrozen(pTargetTechno, false))
+			return ContinueCheck;
+	}
+
+	return Illegal;
+}
+
+// The tail of TechnoClass::MouseOverObject: with the weapon check having failed, the engine
+// still offers Action::Select for the object under the cursor - unless that object is warped
+// out, in which case it answers Action::None and a click on it does nothing at all, not even
+// selecting it. EDI = the hovered object; an object whose freezing warhead allows damage is
+// treated like any other object here.
+DEFINE_HOOK(0x7005CD, TechnoClass_MouseOverObject_TemporalAllowDamage, 0x6)
+{
+	enum { Select = 0x7005D7, None = 0x7005E6 };
+
+	GET(ObjectClass*, pObject, EDI);
+
+	if (const auto pTechno = abstract_cast<TechnoClass*>(pObject))
+	{
+		if (pTechno->BeingWarpedOut && !WarheadTypeExt::AllowsDamageWhileFrozen(pTechno, false))
+			return None;
+	}
+
+	return Select;
+}
+
 DEFINE_HOOK(0x489968, Explosion_Damage_PenetratesIronCurtain, 0x5)
 {
 	enum { BypassInvulnerability = 0x48996D };

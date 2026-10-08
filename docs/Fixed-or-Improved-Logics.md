@@ -3034,13 +3034,16 @@ Temporal.ApplyMultiplier=       ; boolean, default to [CombatDamage] -> Temporal
 ### Allow a `Temporal` warhead to keep its target vulnerable
 
 - A unit that is being warped out by a `Temporal=yes` warhead is untouchable in vanilla, which turns the freeze into a hold rather than a control effect:
+  - `TechnoClass::GetFireError` refuses to fire anything but another `Temporal` warhead at it, which is what removes the attack cursor and stops the shot before it is ever fired.
+  - `TechnoClass::MouseOverObject` answers `Action::None` for it, so it cannot even be clicked or selected while it is being warped out.
   - `TechnoClass::ReceiveDamage` zeroes any damage that reaches it unless that damage ignores defenses, so other weapons cannot finish the job.
   - `DetonateOnOneUnit` skips it entirely, so the per-target effects of a warhead (`AttachEffects`, `Convert`, `Crit`, ...) never land on it either.
-- Two new keys on the *freezing* warhead lift those two gates. They are read from the warhead that is **holding** the target, not from the warhead that is hitting it, so the weapon that froze a unit decides what may happen to it while it is frozen.
-  - `Temporal.AllowDamage` lets other weapons keep damaging the frozen target.
-  - `Temporal.AllowAttachEffects` applies the per-target effects of a detonating warhead to the frozen target as usual.
+- Two new keys on the *freezing* warhead lift those gates. They are read from the warhead that is **holding** the target, not from the warhead that is hitting it, so the weapon that froze a unit decides what may happen to it while it is frozen.
+  - `Temporal.AllowDamage` lets other weapons target and keep damaging the frozen unit: it becomes a legal target for the attack cursor and for firing again, and the damage it takes is applied as usual. This applies to the AI as well - its targeting does not look at the warp at all, only its firing did.
+  - `Temporal.AllowAttachEffects` applies the per-target effects of a detonating warhead to the frozen target as usual. Note that a warhead can only detonate on a target that could be shot at, so `AllowDamage` is what makes this reachable for a directly attacked unit.
 - Both default to `false`, which leaves the vanilla behaviour intact down to the instruction.
 - If more than one Temporal warp holds the same target, the engine chains the extra ones as helpers and keeps the first one as the target's own warp; the verdict comes from that first warp's warhead.
+- The frozen unit itself is still held out of the game while it is being warped out: it cannot be selected by its owner and ignores orders, and the warp-away rendering is unchanged. Only what *others* may do to it is affected.
 
 In `rulesmd.ini`:
 ```ini

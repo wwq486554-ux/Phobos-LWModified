@@ -492,7 +492,10 @@ DEFINE_HOOK(0x4D92BF, FootClass_Mission_Enter_CheckLink, 0x5)
 	return answer == RadioCommand::RequestLoading ? DoNothing : NotifyUnlink;
 }
 
-DEFINE_HOOK(0x73769E, UnitClass_ReceiveCommand_NoEnterOnBridge, 0x6)
+// 0x73769E is `pop edi` / `pop esi` / `pop ebp` (3 bytes) followed by `mov eax,1` (5); the window
+// has to be 8 bytes wide for the rebuilt block to end on an instruction boundary, because this
+// handler returns 0 whenever the two technos are not both on a bridge.
+DEFINE_HOOK(0x73769E, UnitClass_ReceiveCommand_NoEnterOnBridge, 0x8)
 {
 	enum { NoEnter = 0x73780F };
 

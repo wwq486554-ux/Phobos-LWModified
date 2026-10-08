@@ -4,6 +4,7 @@ This page describes all ingame logics that are fixed or improved in Phobos witho
 
 ## Bugfixes and miscellaneous
 
+- Corrected the stolen-byte count of a few hooks whose declared size ended in the middle of a game instruction, which made Syringe rebuild a truncated instruction sequence for the hooks that fall through to the original code (the `faulty return 0 hook` warnings in `syringe.log`). Affected: `0x6FE3F1` and `0x6FE421` (the occupy/bunker damage bonus hooks), `0x4400F9`, `0x73769E`, `0x423855`, `0x6A84DB`, `0x6A86ED` and `0x6FD4ED`.
 - Fixed the bug that GameModeOptions are not correctly saved. For example, `BuildOffAlly` is corrupted after load a save.
 - Fixed the bug that light tint created by buildings can never be removed (light tint persists even if the building is destroyed/sold) after loading a game
 - Fixed the bug when reading a map which puts `Preview(Pack)` after `Map` lead to the game fail to draw the preview

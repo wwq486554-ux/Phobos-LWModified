@@ -205,7 +205,10 @@ DEFINE_HOOK(0x6FD4E4, TechnoClass_FireEBolt_Building_ClampPositive, 0x9)
 	return 0x6FD4ED;
 }
 
-DEFINE_HOOK(0x6FD4ED, TechnoClass_FireEBolt_ZAdjust, 0x7)
+// `mov ecx,[esp+0x34]` (4) + `test ecx,ecx` (2) = 6 whole bytes; 7 also swallowed the first byte of
+// the `je` that follows. This handler never returns 0, so nothing was broken at runtime, but the
+// declared window now matches the instructions it claims.
+DEFINE_HOOK(0x6FD4ED, TechnoClass_FireEBolt_ZAdjust, 0x6)
 {
 	GET_STACK(TechnoClass*, pTarget, STACK_OFFSET(0x30, 0x4));
 	GET_STACK(WeaponTypeClass*, pWeapon, STACK_OFFSET(0x30, 0x8));

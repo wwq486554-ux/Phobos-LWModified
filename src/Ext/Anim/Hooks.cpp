@@ -423,7 +423,8 @@ DEFINE_HOOK(0x423365, AnimClass_DrawIt_ExtraShadow, 0x8)
 	return SkipExtraShadow;
 }
 
-DEFINE_HOOK(0x423855, AnimClass_DrawIt_ShadowLocation, 0x7)
+// `mov ecx,esi` (2) + `call [eax+0x1D0]` (6) = 8 whole bytes; 7 stopped 1 byte short of a boundary.
+DEFINE_HOOK(0x423855, AnimClass_DrawIt_ShadowLocation, 0x8)
 {
 	enum { SkipGameCode = 0x42385D };
 

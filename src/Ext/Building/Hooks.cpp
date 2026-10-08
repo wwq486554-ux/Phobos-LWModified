@@ -1028,7 +1028,10 @@ DEFINE_HOOK(0x440045, BuildingClass_UpdateDelayedFiring_PrefiringMark1, 0x6)
 	return 0;
 }
 
-DEFINE_HOOK(0x4400F9, BuildingClass_UpdateDelayedFiring_PrefiringMar2, 0x7)
+// Two hooks share 0x4400F9, so Syringe covers the largest declared size. 0x4400F9 is a single
+// 6-byte `mov eax,[esi+0x520]`; declaring 7 here made the shared window run 1 byte into the next
+// instruction, and both handlers return 0, so Syringe's rebuilt instruction stream was truncated.
+DEFINE_HOOK(0x4400F9, BuildingClass_UpdateDelayedFiring_PrefiringMar2, 0x6)
 {
 	GET(BuildingClass*, pThis, ESI);
 	BuildingExt::Fetch(pThis)->IsFiringNow = false;

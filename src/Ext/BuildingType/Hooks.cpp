@@ -274,7 +274,12 @@ DEFINE_HOOK(0x4A8FD7, DisplayClass_BuildingProximityCheck_BuildArea, 0x6)
 
 #pragma endregion
 
-DEFINE_HOOK(0x6FE3F1, TechnoClass_FireAt_OccupyDamageBonus, 0xB)
+// The stolen bytes must cover whole instructions: 0x6FE3F1 is `fild [esp+0x2C]` (4) followed by
+// `mov eax, ds:0x8871E0` (5). Syringe's RebuildInstructions decodes inside a window of exactly
+// `size` bytes and falls back to copying a truncated tail verbatim when the last instruction does
+// not fit, so a size that lands in the middle of the following `fmul` (0xC) makes the `return 0`
+// path - every shot fired by something that is not a BuildingClass - resume mid-instruction.
+DEFINE_HOOK(0x6FE3F1, TechnoClass_FireAt_OccupyDamageBonus, 0x9)
 {
 	enum { ApplyDamageBonus = 0x6FE405 };
 
@@ -290,7 +295,7 @@ DEFINE_HOOK(0x6FE3F1, TechnoClass_FireAt_OccupyDamageBonus, 0xB)
 	return 0;
 }
 
-DEFINE_HOOK(0x6FE421, TechnoClass_FireAt_BunkerDamageBonus, 0xB)
+DEFINE_HOOK(0x6FE421, TechnoClass_FireAt_BunkerDamageBonus, 0x9)
 {
 	enum { ApplyDamageBonus = 0x6FE435 };
 

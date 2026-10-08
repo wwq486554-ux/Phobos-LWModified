@@ -954,3 +954,4 @@ This page lists all the individual contributions to the project by their author.
   - Tactical view zoom: the tactical map is rendered at a resolution independent of the UI, with a configurable level table, a runtime whole-map level, three rebindable hotkeys and a middle-click reset
   - Guided spawned missiles (`Missile.Homing`) now aim at a predicted intercept point instead of the target's current position, with `LeadFactor` / `MaxLeadTime` keys, and their air proximity fuze tests the flown segment so a fast missile can no longer cross it without detonating
   - `Temporal.AllowDamage` / `Temporal.AllowAttachEffects`: a warhead that freezes a unit can let it keep taking damage and keep receiving warhead effects while it is frozen, instead of the vanilla total immunity
+  - Corrected several hook sizes that ended in the middle of a game instruction and made Syringe rebuild a truncated instruction sequence (the `faulty return 0 hook` warnings)

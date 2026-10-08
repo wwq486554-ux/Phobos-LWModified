@@ -99,6 +99,71 @@ bool WarheadTypeExt::CanAffectInvulnerable(TechnoClass* pTarget) const
 	return pTarget->ForceShielded ? this->PenetratesForceShield.Get(this->PenetratesIronCurtain) : this->PenetratesIronCurtain;
 }
 
+// The warhead whose Temporal warp is holding pTarget right now.
+//
+// TechnoClass::TemporalTargetingMe (+0x278) is the TemporalClass instance the engine
+// itself considers to be warping this target: TemporalClass::Fire stores itself there
+// (0x71AF98) and LetGo clears it again (0x71AC0E). Going through its Owner leads to
+// the caster, whose TechnoExt remembers the weapon that actually delivered the
+// Temporal warhead - see TechnoExt::TemporalWarpWeapon.
+//
+// With more than one Temporal warp on the same target the engine chains the extra
+// instances as helpers and leaves TemporalTargetingMe pointing at the first one, so
+// the verdict comes from the warp the engine treats as the target's own.
+WarheadTypeClass* WarheadTypeExt::GetFreezeSourceWarhead(TechnoClass* pTarget)
+{
+	if (!pTarget)
+		return nullptr;
+
+	const auto pTemporal = pTarget->TemporalTargetingMe;
+
+	if (!pTemporal)
+		return nullptr;
+
+	const auto pOwner = pTemporal->Owner;
+
+	if (!pOwner)
+		return nullptr;
+
+	WeaponTypeClass* pWeapon = nullptr;
+
+	if (const auto pOwnerExt = TechnoExt::TryFetch(pOwner))
+		pWeapon = pOwnerExt->TemporalWarpWeapon;
+
+	// TemporalWeapon.AnySlot=no stops the recording above, so fall back to the weapon
+	// the engine itself would use for this warp.
+	if (!pWeapon)
+	{
+		const int index = pOwner->SelectWeapon(nullptr);
+		const auto pType = pOwner->GetTechnoType();
+
+		if (index >= 0 && index < pType->WeaponCount)
+			pWeapon = pOwner->GetWeapon(index)->WeaponType;
+	}
+
+	// Only a Temporal warhead can have started the warp this lookup is about.
+	if (!pWeapon || !pWeapon->Warhead || !pWeapon->Warhead->Temporal)
+		return nullptr;
+
+	return pWeapon->Warhead;
+}
+
+bool WarheadTypeExt::AllowsDamageWhileFrozen(TechnoClass* pTarget)
+{
+	if (const auto pWarhead = GetFreezeSourceWarhead(pTarget))
+		return WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowDamage;
+
+	return false;
+}
+
+bool WarheadTypeExt::AllowsEffectsWhileFrozen(TechnoClass* pTarget)
+{
+	if (const auto pWarhead = GetFreezeSourceWarhead(pTarget))
+		return WarheadTypeExt::Fetch(pWarhead)->Temporal_AllowAttachEffects;
+
+	return false;
+}
+
 void WarheadTypeExt::DetonateAt(WarheadTypeClass* pThis, AbstractClass* pTarget, TechnoClass* pOwner, int damage, HouseClass* pFiringHouse)
 {
 	WarheadTypeExt::DetonateAt(pThis, pTarget->GetCoords(), pOwner, damage, pFiringHouse, pTarget);
@@ -189,6 +254,8 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Rocker_AmplitudeOverride.Read(exINI, pSection, "Rocker.AmplitudeOverride");
 	this->Temporal_ApplyVersus.Read(exINI, pSection, "Temporal.ApplyVersus");
 	this->Temporal_ApplyMultiplier.Read(exINI, pSection, "Temporal.ApplyMultiplier");
+	this->Temporal_AllowDamage.Read(exINI, pSection, "Temporal.AllowDamage");
+	this->Temporal_AllowAttachEffects.Read(exINI, pSection, "Temporal.AllowAttachEffects");
 
 	// Crits
 	this->Crit_Chance.Read(exINI, pSection, "Crit.Chance");
@@ -612,6 +679,8 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->Rocker_AmplitudeOverride)
 		.Process(this->Temporal_ApplyVersus)
 		.Process(this->Temporal_ApplyMultiplier)
+		.Process(this->Temporal_AllowDamage)
+		.Process(this->Temporal_AllowAttachEffects)
 
 		.Process(this->Crit_Chance)
 		.Process(this->Crit_ApplyChancePerTarget)

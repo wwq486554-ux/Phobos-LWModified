@@ -197,7 +197,13 @@ void WarheadTypeExt::Detonate(TechnoClass* pOwner, HouseClass* pHouse, BulletExt
 
 void WarheadTypeExt::DetonateOnOneUnit(HouseClass* pHouse, TechnoClass* pTarget, const CoordStruct& coords, int damage, TechnoClass* pOwner, BulletExt* pBulletExt, bool bulletWasIntercepted, int distance)
 {
-	if (!pTarget || pTarget->InLimbo || !pTarget->IsAlive || !pTarget->Health || pTarget->IsSinking || pTarget->BeingWarpedOut)
+	// A unit that is being warped out is skipped entirely, which is what stops every
+	// per-target effect - AttachEffects, Convert, Crit, ... - from landing on a
+	// chrono-frozen target. The warhead holding the target can opt out of that.
+	const bool warpedOut = pTarget && pTarget->BeingWarpedOut;
+
+	if (!pTarget || pTarget->InLimbo || !pTarget->IsAlive || !pTarget->Health || pTarget->IsSinking
+		|| (warpedOut && !WarheadTypeExt::AllowsEffectsWhileFrozen(pTarget)))
 		return;
 
 	if (!this->CanTargetHouse(pHouse, pTarget) || !this->CanAffectTarget(pTarget))

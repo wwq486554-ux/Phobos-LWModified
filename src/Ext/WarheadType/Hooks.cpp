@@ -451,6 +451,28 @@ DEFINE_HOOK(0x701A54, TechnoClass_ReceiveDamage_PenetratesIronCurtain, 0x6)
 	return 0;
 }
 
+// Vanilla makes a unit that is being warped out by a Temporal warhead immune to
+// every further hit: TechnoClass::ReceiveDamage tests BeingWarpedOut at 0x701AAD
+// and, unless the damage ignores defenses, zeroes *Damage at 0x701AC6 and returns.
+//
+// Hooking that zeroing instruction keeps the entire branch above it - the iron
+// curtain handling and the Ares hook in front of it included - untouched, and
+// 0x701AC6 is only reached by a target that is warped out and is *not* taking
+// ignore-defenses damage, so nothing else pays for this.
+//
+// The warhead that is holding the target decides, not the one that is hitting it.
+DEFINE_HOOK(0x701AC6, TechnoClass_ReceiveDamage_TemporalAllowDamage, 0x6)
+{
+	enum { AllowDamage = 0x701ADB };
+
+	GET(TechnoClass*, pThis, ESI);
+
+	if (WarheadTypeExt::AllowsDamageWhileFrozen(pThis))
+		return AllowDamage;
+
+	return 0;
+}
+
 DEFINE_HOOK(0x489968, Explosion_Damage_PenetratesIronCurtain, 0x5)
 {
 	enum { BypassInvulnerability = 0x48996D };

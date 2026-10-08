@@ -727,6 +727,8 @@ HideShakeEffects=false           ; boolean
 - New trajectory system with general functions (by CrimRecya)
 - Projectile life cycle logic and retargeting logic (by CrimRecya)
 - Projectile release warheads and weapons (by CrimRecya)
+- [Allow a `Temporal` warhead to keep its target vulnerable](Fixed-or-Improved-Logics.md#allow-a-temporal-warhead-to-keep-its-target-vulnerable) (by laowang)
+  - A unit that is being warped out is immune to all further damage in vanilla and skips every per-target warhead effect. `Temporal.AllowDamage` and `Temporal.AllowAttachEffects`, written on the warhead that is *holding* the target, lift those two gates so a chrono-frozen unit can keep being shot at and keep receiving effects.
 
 #### Vanilla fixes:
 - [Armed engineers can attack](Fixed-or-Improved-Logics.md#armed-engineers-can-attack) (by laowang)

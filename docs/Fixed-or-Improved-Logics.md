@@ -3030,6 +3030,24 @@ Temporal.ApplyVersus=           ; boolean, default to [CombatDamage] -> Temporal
 Temporal.ApplyMultiplier=       ; boolean, default to [CombatDamage] -> Temporal.ApplyMultiplier
 ```
 
+### Allow a `Temporal` warhead to keep its target vulnerable
+
+- A unit that is being warped out by a `Temporal=yes` warhead is untouchable in vanilla, which turns the freeze into a hold rather than a control effect:
+  - `TechnoClass::ReceiveDamage` zeroes any damage that reaches it unless that damage ignores defenses, so other weapons cannot finish the job.
+  - `DetonateOnOneUnit` skips it entirely, so the per-target effects of a warhead (`AttachEffects`, `Convert`, `Crit`, ...) never land on it either.
+- Two new keys on the *freezing* warhead lift those two gates. They are read from the warhead that is **holding** the target, not from the warhead that is hitting it, so the weapon that froze a unit decides what may happen to it while it is frozen.
+  - `Temporal.AllowDamage` lets other weapons keep damaging the frozen target.
+  - `Temporal.AllowAttachEffects` applies the per-target effects of a detonating warhead to the frozen target as usual.
+- Both default to `false`, which leaves the vanilla behaviour intact down to the instruction.
+- If more than one Temporal warp holds the same target, the engine chains the extra ones as helpers and keeps the first one as the target's own warp; the verdict comes from that first warp's warhead.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWARHEAD]                   ; WarheadType
+Temporal.AllowDamage=false      ; boolean
+Temporal.AllowAttachEffects=false ; boolean
+```
+
 ### Allowing damage dealt to firer
 
 - You can now allow warhead to deal damage (and apply damage-adjacent effects such as `KillDriver` and `DisableWeapons/Sonar/Flash.Duration` *(Ares features)*) on the object that is considered as the firer of the Warhead even if it does not have `DamageSelf=true`.

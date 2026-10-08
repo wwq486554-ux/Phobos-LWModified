@@ -61,6 +61,17 @@ public:
 	Nullable<bool> Temporal_ApplyVersus;
 	Nullable<bool> Temporal_ApplyMultiplier;
 
+	// Opt-outs from the two gates vanilla closes on a unit that is being warped
+	// out (TechnoClass::BeingWarpedOut, +0x270). Both are read from the warhead
+	// that is *holding* the target, never from the warhead that is hitting it, so
+	// the weapon that froze a unit decides what may happen to it while it is frozen.
+	//   AllowDamage        - incoming damage is applied as usual.
+	//   AllowAttachEffects - the per-target effects of a detonating warhead
+	//                        (AttachEffects, Convert, Crit, ...) are applied as
+	//                        usual instead of being skipped.
+	Valueable<bool> Temporal_AllowDamage;
+	Valueable<bool> Temporal_AllowAttachEffects;
+
 	Valueable<double> Crit_Chance;
 	Nullable<bool> Crit_ApplyChancePerTarget;
 	Valueable<int> Crit_ExtraDamage;
@@ -354,6 +365,8 @@ public:
 		, Rocker_AmplitudeOverride {}
 		, Temporal_ApplyVersus {}
 		, Temporal_ApplyMultiplier {}
+		, Temporal_AllowDamage { false }
+		, Temporal_AllowAttachEffects { false }
 
 		, Crit_Chance { 0.0 }
 		, Crit_ApplyChancePerTarget {}
@@ -612,6 +625,13 @@ public:
 	bool CanTargetHouse(HouseClass* pHouse, TechnoClass* pTechno) const;
 	bool CanAffectTarget(TechnoClass* pTarget) const;
 	bool CanAffectInvulnerable(TechnoClass* pTarget) const;
+
+	// The warhead whose Temporal warp is currently holding pTarget, or nullptr when
+	// the target is not being warped or the source cannot be determined. Static
+	// because every caller looks the source up from the victim, not from itself.
+	static WarheadTypeClass* GetFreezeSourceWarhead(TechnoClass* pTarget);
+	static bool AllowsDamageWhileFrozen(TechnoClass* pTarget);
+	static bool AllowsEffectsWhileFrozen(TechnoClass* pTarget);
 	bool EligibleForFullMapDetonation(TechnoClass* pTechno, TechnoTypeClass* pType, HouseClass* pOwner) const;
 	bool IsHealthInThreshold(TechnoClass* pTarget) const;
 	bool IsVeterancyInThreshold(TechnoClass* pTarget) const;

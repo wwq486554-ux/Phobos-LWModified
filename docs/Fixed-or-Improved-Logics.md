@@ -3061,6 +3061,7 @@ Temporal.AllowAttachEffects=false ; boolean
 - A freeze that is cut short - the caster stops, walks away, dies, or the engine cancels the warp on its own - only pays for the time the target really was frozen.
 - A payment that finishes the target off removes it through the engine's own warp erase: no wreck, no `DeathWeapon` and no self-destruct release. A freeze that runs its course without killing the target releases it, exactly as if the caster had let go.
 - The damage a freeze deals is never gated by `Temporal.AllowDamage`, which only says whether *outside* weapons may hurt the frozen unit.
+- `Temporal.Interval` keeps the caster's beam on the target for that many extra frames after the damage phase is over and before the target is released, which is what gives the freeze a cooldown: the engine already refuses to fire at the unit a techno is warping, so the next freeze cannot start until the warp is let go. `0`, the default, releases the target as soon as `Temporal.Duration` has run out.
 - `Temporal.Duration=0`, the default, leaves the vanilla behaviour intact down to the instruction.
 
 In `rulesmd.ini`:
@@ -3068,6 +3069,7 @@ In `rulesmd.ini`:
 [SOMEWARHEAD]                   ; WarheadType
 Temporal.Duration=0             ; integer, frames
 Temporal.DamageMode=continuous  ; end or continuous
+Temporal.Interval=0             ; integer, frames
 ```
 
 ### Allowing damage dealt to firer

@@ -15,11 +15,11 @@
 >
 > |  |  |
 > |---|---|
-> | **Based on / 基线** | Phobos `v0.5.0.0-alpha1` (`5a72f20641ec9a23f14fcc3959f647c08c736cd2`) |
+> | **Based on / 基线** | Phobos `v0.5.0.0-alpha2` (`b1dc830570358315273ce3f958a8846c439c1d7e`) |
 > | **Also integrates / 另整合** | upstream PR [#2060](https://github.com/Phobos-developers/Phobos/pull/2060) **"New trajectory system" — still an unmerged draft.** It reopens [#1582](https://github.com/Phobos-developers/Phobos/pull/1582) by [@CrimRecya](https://github.com/CrimRecya), reopened by [@TaranDahl](https://github.com/TaranDahl). |
 > | **Fork additions / 本分支追加** | `SpecialAction` · `SweepFire` · `WeaponXFire` · `LocomotorWeapon` · `BodyWeapon` · `AdvancedAircraftMissions` · universal scatter shaping · `Temporal` any-slot fix · engineer attack · Engrave `FiringAnim` |
-> | **Version string / 版本串** | `v0.5.0.0-alpha1-pbsnew1` |
-> | **Modification date / 修改日期** | 2026-09-26 |
+> | **Version string / 版本串** | `v0.5.0.0-alpha2-pbsnew3` |
+> | **Modification date / 修改日期** | 2026-10-10 |
 >
 > If a log, crash report or file property mentions `pbsnew`, you are running this
 > fork and **not** official Phobos.
@@ -35,7 +35,7 @@
 
 **PR [#2060](https://github.com/Phobos-developers/Phobos/pull/2060) "New trajectory system"** (original work by
 [@CrimRecya](https://github.com/CrimRecya) in [#1582](https://github.com/Phobos-developers/Phobos/pull/1582), reopened
-by [@TaranDahl](https://github.com/TaranDahl)) — merged here by hand on top of `v0.5.0.0-alpha1`:
+by [@TaranDahl](https://github.com/TaranDahl)) — merged here by hand on the fork's original `v0.5.0.0-alpha1` base and carried over to `v0.5.0.0-alpha2`:
 
 - New trajectory framework with `Actual`/`Virtual` base classes, replacing the old flat
   `Straight`/`Bombard`/`Parabola` implementations.
@@ -77,12 +77,12 @@ Identical to official Phobos: put `Phobos.dll` into your YR game directory and l
   MSVC toolchain under Wine — see `scripts/linux/README.md`.
 - **CI:** publishing a GitHub Release triggers `.github/workflows/release.yml`, which builds with
   `BuildType=RELEASE` and attaches `Phobos.dll` / `Phobos.pdb` to the release. This fork tags its
-  releases `v0.5.0.0-alpha1-pbsnewN`, which upstream's changelog extractor does not recognise, so
+  releases `v0.5.0.0-alpha2-pbsnewN`, which upstream's changelog extractor does not recognise, so
   that step was made non-fatal here (`Fallback Release Notes`) — otherwise the run would abort
   before the assets are uploaded.
 
 > **Build type decides the version string.** Only a `RELEASE` build reports
-> `v0.5.0.0-alpha1-pbsnew1`. A plain local build — `--build-type` omitted, or the upstream
+> `v0.5.0.0-alpha2-pbsnew3`. A plain local build — `--build-type` omitted, or the upstream
 > `build_release.bat`, which passes no `BuildType` — reports
 > `v0.5.0.0 @ <commit> @ refs/heads/main` instead, which does **not** identify this fork.
 > Ship release-family builds.
@@ -91,7 +91,7 @@ Identical to official Phobos: put `Phobos.dll` into your YR game directory and l
 
 - Multiplayer sync of `SpecialAction` (`Weapon` pre-load and per-unit super weapon) has **not** been verified.
 - Some features were only compile-verified, not play-tested, at the time of this release.
-- This fork tracks upstream `v0.5.0.0-alpha1` and is **not** synced with current upstream `develop`.
+- This fork tracks upstream `v0.5.0.0-alpha2` and is **not** synced with current upstream `develop`.
 
 ## License / 许可
 

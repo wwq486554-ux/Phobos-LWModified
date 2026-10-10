@@ -4,6 +4,7 @@ This page describes all ingame logics that are fixed or improved in Phobos witho
 
 ## Bugfixes and miscellaneous
 
+- Fixed the weapon index displacement that upstream #2128 introduced by moving `RulesClass::LoadTypesFromINI` to a later call site: the unlisted `[SpecialWeapons]` types were created inside the type arrays and every weapon index moved up by one, so any unit whose weapon is resolved by index - infantry firing `Inviso` projectiles first of all - could not target water or cliff tiles at all and stayed in its firing animation without ever producing a shot. Vanilla's loading order is restored and `[SpecialWeapons]` is resolved by name instead (by `Noble_Fish`, included with the v0.5-alpha2 upgrade).
 - Corrected the stolen-byte count of a few hooks whose declared size ended in the middle of a game instruction, which made Syringe rebuild a truncated instruction sequence for the hooks that fall through to the original code (the `faulty return 0 hook` warnings in `syringe.log`). Affected: `0x6FE3F1` and `0x6FE421` (the occupy/bunker damage bonus hooks), `0x4400F9`, `0x73769E`, `0x423855`, `0x6A84DB`, `0x6A86ED` and `0x6FD4ED`.
 - Fixed the bug that GameModeOptions are not correctly saved. For example, `BuildOffAlly` is corrupted after load a save.
 - Fixed the bug that light tint created by buildings can never be removed (light tint persists even if the building is destroyed/sold) after loading a game

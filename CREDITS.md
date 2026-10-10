@@ -746,6 +746,7 @@ This page lists all the individual contributions to the project by their author.
   - Allow `(Pre)ProductionAnim` animations to use `Powered` & `PoweredLight/Effect/Special` keys
   - Fix the Spotlight-transport interaction bug caused by the incorrect reference removal fix
   - Fix the bug where the fix for airborne objects triggering sinking misjudged units with `Locomotor=Hover`
+  - Fix the weapon index displacement caused by moving `RulesClass::LoadTypesFromINI` (#2128), which left every unit whose weapon is resolved by index - infantry firing `Inviso` projectiles first of all - unable to target water or cliff tiles
 - **Ollerus**:
   - Build limit group enhancement
   - Customizable rocker amplitude
@@ -958,3 +959,4 @@ This page lists all the individual contributions to the project by their author.
   - `Temporal.Interval`: the target is released when `Temporal.Duration` is over, and the caster's reload is pushed out by that many frames instead, so the beam does not linger on the victim while the caster waits
   - `Temporal.ZeroHealthAction` (`erase`/`linger`) and `Temporal.KilledByOthers` (`normal`/`erase`) decide whether a freeze may finish its target off while it holds it, and how a lethal hit from someone else resolves - the warp erase or the ordinary death path
   - Corrected several hook sizes that ended in the middle of a game instruction and made Syringe rebuild a truncated instruction sequence (the `faulty return 0 hook` warnings)
+  - Ported upstream's fix for the weapon index displacement (#2128) that kept infantry with `Inviso` projectiles from targeting water and cliff tiles

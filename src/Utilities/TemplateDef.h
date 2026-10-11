@@ -875,6 +875,32 @@ namespace detail
 	}
 
 	template <>
+	inline bool read<SuddenDeathMode>(SuddenDeathMode& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			static const std::pair<const char*, SuddenDeathMode> Names[] =
+			{
+				{"normal", SuddenDeathMode::Normal},
+				{"erase", SuddenDeathMode::Erase},
+			};
+
+			for (auto const& [name, val] : Names)
+			{
+				if (_strcmpi(parser.value(), name) == 0)
+				{
+					value = val;
+					return true;
+				}
+			}
+
+			Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected normal or erase");
+		}
+
+		return false;
+	}
+
+	template <>
 	inline bool read<TemporalKilledByOthers>(TemporalKilledByOthers& value, INI_EX& parser, const char* pSection, const char* pKey)
 	{
 		if (parser.ReadString(pSection, pKey))

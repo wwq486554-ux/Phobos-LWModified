@@ -3,6 +3,7 @@
 #include <Ext/InfantryType/Body.h>
 #include <Ext/TEvent/Body.h>
 #include <Ext/WarheadType/Body.h>
+#include <Ext/WarheadType/SuddenDeath.h>
 #include <Ext/WeaponType/Body.h>
 #include <Utilities/AresHelper.h>
 #include <Utilities/Debug.h>
@@ -26,6 +27,31 @@ DEFINE_HOOK(0x701900, TechnoClass_ReceiveDamage_Shield, 0x6)
 	const auto pWHExt = WarheadTypeExt::Fetch(args->WH);
 	const auto pAttacker = args->Attacker;
 	int& damage = *args->Damage;
+
+	// SuddenDeath: the warhead kills whatever it reaches, and this is the front door of the one
+	// function every point of damage has to pass - so this is where such a warhead is noticed.
+	//
+	// Noticed, and no more than that: the target is written down and the hit is left exactly as
+	// the engine wrote it. Nothing here rewrites the amount, sets IgnoreDefenses or returns early.
+	// Killing the target *here* means killing it in the middle of the projectile detonation, and
+	// destroying an object there re-enters the object bookkeeping that is still being walked: the
+	// shipyard crash this queue exists for is an AnimClass destroyed a second time out of the
+	// pointer-expired notification (AnnounceExpiredPointer, 0x7258D0), which leaves the outer
+	// ObjectClass::UnInit (0x5F4D30) calling through a vtable that has already fallen back to
+	// AbstractClass. The kill is therefore executed at the head of the next logic frame instead,
+	// by SuddenDeath::ExecutePending, with a plain C4Warhead execution.
+	//
+	// Everything that is not SuddenDeath has to keep falling through to the rest of this handler:
+	// the threshold and invoker filters, the per-target effects, the damage multipliers and the
+	// shield interception all live further down in this same function, and an early return that
+	// covered the non-SuddenDeath path would quietly compile every one of them out - the compiler
+	// drops the whole unreachable tail, which is a 4 KB hole in .text and working shields and
+	// multipliers gone with it.
+	if (pWHExt->SuddenDeath)
+	{
+		SuddenDeath::RegisterTechno(pThis, pAttacker,
+			pAttacker ? pAttacker->Owner : args->SourceHouse, pWHExt->SuddenDeath_Mode);
+	}
 
 	// LocomotorWeapon diagnostics. TechnoClass::ReceiveDamage has exactly two
 	// gates that zero the damage based on the *target's* state, and this hook

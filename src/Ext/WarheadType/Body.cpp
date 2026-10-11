@@ -36,6 +36,14 @@ bool WarheadTypeExt::CanTargetHouse(HouseClass* pHouse, TechnoClass* pTarget) co
 
 bool WarheadTypeExt::CanAffectTarget(TechnoClass* pTarget) const
 {
+	// A SuddenDeath warhead kills whatever it reaches, so it does not ask whether the target is
+	// worth damaging: the Versus table (this is where every "0% against armour X" rejection is
+	// made), the health and veterancy windows and the air/ground split are all skipped. The
+	// per-target calls below and the damage itself both go through here, so leaving this gate in
+	// place would let a target with a 0% entry survive a warhead that is supposed to ignore it.
+	if (this->SuddenDeath)
+		return true;
+
 	if (!IsHealthInThreshold(pTarget))
 		return false;
 
@@ -253,6 +261,8 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Temporal_Interval.Read(exINI, pSection, "Temporal.Interval");
 	this->Temporal_ZeroHealthAction.Read(exINI, pSection, "Temporal.ZeroHealthAction");
 	this->Temporal_KilledByOthers.Read(exINI, pSection, "Temporal.KilledByOthers");
+	this->SuddenDeath.Read(exINI, pSection, "SuddenDeath");
+	this->SuddenDeath_Mode.Read(exINI, pSection, "SuddenDeath.Mode");
 
 	if (this->Temporal_ZeroHealthAction == TemporalZeroHealthAction::Linger)
 	{
@@ -698,6 +708,8 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->Temporal_Interval)
 		.Process(this->Temporal_ZeroHealthAction)
 		.Process(this->Temporal_KilledByOthers)
+		.Process(this->SuddenDeath)
+		.Process(this->SuddenDeath_Mode)
 
 		.Process(this->Crit_Chance)
 		.Process(this->Crit_ApplyChancePerTarget)

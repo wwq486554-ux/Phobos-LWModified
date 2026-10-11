@@ -231,6 +231,7 @@
     <ClCompile Include="src\Ext\WarheadType\Body.cpp" />
     <ClCompile Include="src\Ext\WarheadType\Detonate.cpp" />
     <ClCompile Include="src\Ext\WarheadType\Hooks.cpp" />
+    <ClCompile Include="src\Ext\WarheadType\SuddenDeath.cpp" />
     <!-- src\Ext\WeaponType -->
     <ClCompile Include="src\Ext\WeaponType\Body.cpp" />
     <ClCompile Include="src\Ext\WeaponType\Hooks.cpp" />
@@ -405,6 +406,7 @@
     <ClInclude Include="src\Ext\VoxelAnim\Body.h" />
     <ClInclude Include="src\Ext\VoxelAnimType\Body.h" />
     <ClInclude Include="src\Ext\WarheadType\Body.h" />
+    <ClInclude Include="src\Ext\WarheadType\SuddenDeath.h" />
     <ClInclude Include="src\Ext\WeaponType\Body.h" />
     <!-- src\Interop -->
     <ClInclude Include="src\Interop\AttachEffect.h" />

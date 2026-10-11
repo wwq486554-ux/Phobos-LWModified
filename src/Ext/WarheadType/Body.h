@@ -94,6 +94,17 @@ public:
 	Valueable<TemporalZeroHealthAction> Temporal_ZeroHealthAction;
 	Valueable<TemporalKilledByOthers> Temporal_KilledByOthers;
 
+	// SuddenDeath - a warhead that kills whatever it hits, unconditionally. The hit is forced
+	// through with defenses ignored and an amount that always zeroes the target's health, so
+	// the weapon's own damage, every damage multiplier, the Verses/armour tables, immunity
+	// flags, Iron Curtain, Force Shield and shields do not enter into it. CellSpread still
+	// applies: everything in range dies, and nothing in range is weakened by distance.
+	//
+	// The key is the switch; SuddenDeath.Mode picks the exit (see SuddenDeathMode). Both
+	// default to the vanilla-compatible behaviour - false/Normal change nothing at all.
+	Valueable<bool> SuddenDeath;
+	Valueable<SuddenDeathMode> SuddenDeath_Mode;
+
 	Valueable<double> Crit_Chance;
 	Nullable<bool> Crit_ApplyChancePerTarget;
 	Valueable<int> Crit_ExtraDamage;
@@ -394,6 +405,9 @@ public:
 		, Temporal_Interval { 0 }
 		, Temporal_ZeroHealthAction { TemporalZeroHealthAction::Erase }
 		, Temporal_KilledByOthers { TemporalKilledByOthers::Normal }
+
+		, SuddenDeath { false }
+		, SuddenDeath_Mode { SuddenDeathMode::Normal }
 
 		, Crit_Chance { 0.0 }
 		, Crit_ApplyChancePerTarget {}

@@ -4239,6 +4239,27 @@ FireUp.ResetInRetarget=true     ; boolean
 
 ## Warheads
 
+### Sudden death warhead
+
+- A warhead with `SuddenDeath=yes` kills whatever its detonation reaches and does not ask what it is hitting: the warhead's own damage, every damage multiplier, the `Verses`/armour table, the health and veterancy windows, `Immune=yes`, the Iron Curtain, the Force Shield and the shields this fork adds are all bypassed, and the target's health goes to exactly zero.
+- The kill is not performed inside the damage call it arrives in. That call runs deep inside the projectile detonation, where destroying the target re-enters the object bookkeeping that is still being walked - an `AnimClass` destroyed a second time out of the pointer-expired notification leaves `ObjectClass::UnInit` calling through a vtable that has already fallen back to `AbstractClass`. A hit therefore only records its target: the engine settles that hit with its own damage, its own gates and its own death path, and the recorded targets are executed at the head of the next logic frame with a neutral `C4Warhead` execution. In play the kill lands one logic frame later, which is invisible.
+- The cells a `CellSpread` covers are swept as well: a cell holding tiberium is cleared down to bare ground, a cell holding a bridge has that bridge broken through the engine's own bridge destruction instead of its probability roll, and terrain objects - trees, and this mod's tiberium pillars - are removed outright, `Immune=yes` or not. Terrain is the one thing the damage pipeline cannot reach at all, which is why it is a cell sweep rather than a damage call.
+- While a unit holds a weapon whose warhead is a `SuddenDeath` warhead, the engine's "the target is immune, so offer no attack cursor" downgrade is skipped for that unit, so `Immune=yes` objects can be aimed at and force-fired upon. `[General] -> TreeTargeting=no` still means terrain needs Ctrl or a weapon with `TerrainFire=yes` to get the automatic cursor.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWARHEAD]                ; WarheadType
+SuddenDeath=no               ; boolean
+SuddenDeath.Mode=normal      ; normal | erase
+```
+
+```{note}
+- `SuddenDeath.Mode=normal` leaves through the ordinary death path - wreck, `DeathWeapon` and revenge weapon included - and credits the kill normally. `erase` deletes the target instead: no wreck, no `DeathWeapon`, no revenge weapon and no kill credit.
+- The mode takes the words `normal` and `erase`; numbers are not accepted.
+- `Damage` on the warhead does not decide what dies. It only settles the engine's own damage pass, i.e. which objects the blast records. `CellSpread` is what widens the cell sweep over tiberium, bridges and terrain.
+- Saves written before this key existed do not load into a build that carries it, because the warhead type's saved data changed. Start a new game after installing such a build.
+```
+
 ```{hint}
 All new Warhead effects
 - Can be used with `CellSpread` and Ares' GenericWarhead superweapon where applicable.

@@ -511,3 +511,16 @@ enum class TemporalKilledByOthers : unsigned char
 	Normal = 0,
 	Erase = 1
 };
+
+// SuddenDeath.Mode - how a target hit by a SuddenDeath warhead leaves the game. A SuddenDeath
+// hit ignores every defence (armour, Verses, immunity, Iron Curtain, Force Shield, the shields
+// this fork adds) and always brings the target's health to exactly zero, so the only question
+// left is which exit it takes. Normal walks the ordinary death path - wreck and DeathWeapon
+// included. Erase removes the target outright: no wreck, no DeathWeapon, no revenge weapon,
+// nothing left behind. Erase is not the damage path at all, so it also skips kill credit -
+// the target is deleted, not destroyed.
+enum class SuddenDeathMode : unsigned char
+{
+	Normal = 0,
+	Erase = 1
+};

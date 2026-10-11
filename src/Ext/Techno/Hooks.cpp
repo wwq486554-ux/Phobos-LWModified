@@ -579,6 +579,27 @@ DEFINE_HOOK(0x708AEB, TechnoClass_ReplaceArmorWithShields, 0x6) //TechnoClass_Sh
 	else
 		pTarget = R->EBP<ObjectClass*>();
 
+	// SuddenDeath: a warhead that kills whatever it reaches must not be stopped by the
+	// engine's "can this weapon hurt that armour" gate, and this origin - 0x6FCB64, the
+	// Armor load inside TechnoClass::GetFireError - is exactly that gate. The engine reads
+	// the target's Armor here and then looks the warhead's Verses entry up; Ares replaces
+	// that lookup with TechnoClass_CanFire_Verses (its hook at 0x6FCB6A) and answers
+	// FireError::ILLEGAL (5) when the entry is zero. A gate that refuses the shot means no
+	// projectile is ever made, which is what "the infantry does not fire at all" looks like
+	// in game. A SuddenDeath hit ignores armour, so the shot has to land on the engine's own
+	// "passed" point 0x6FCB8D instead.
+	//
+	// Stolen bytes at this origin: `mov eax,[eax+0x9c]` (6 bytes, the Armor load - the size
+	// above covers exactly it). 0x6FCB8D starts with `mov al,[edi+0x16e]`
+	// (WarheadTypeClass::BombDisarm), which overwrites EAX before any read, so skipping the
+	// load is safe. Return addresses were checked against every DLL in this install: Ares
+	// hooks 0x6FCB6A and 0x6FCBAD, 0x6FCB8D belongs to nobody.
+	if (R->Origin() == 0x6FCB64 && pWeapon && pWeapon->Warhead
+		&& WarheadTypeExt::Fetch(pWeapon->Warhead)->SuddenDeath)
+	{
+		return 0x6FCB8D;
+	}
+
 	if (const auto pExt = TechnoExt::TryFetch(abstract_cast<TechnoClass*>(pTarget)))
 	{
 		if (const auto pShieldData = pExt->Shield.get())

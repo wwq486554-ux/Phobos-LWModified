@@ -3,6 +3,7 @@
 #include <VeinholeMonsterClass.h>
 
 #include <Ext/House/Body.h>
+#include <Ext/WarheadType/SuddenDeath.h>
 
 std::unique_ptr<ScenarioExt::ExtData> ScenarioExt::Data = nullptr;
 
@@ -282,6 +283,11 @@ DEFINE_HOOK(0x68AD2F, ScenarioClass_LoadFromINI, 0x5)
 	GET(CCINIClass*, pINI, EDI);
 
 	ScenarioExt::LoadFromINIFile(pItem, pINI);
+
+	// A different scenario must not inherit pending SuddenDeath hits: the recorded targets belong
+	// to the scenario that is being replaced.
+	SuddenDeath::ClearPending();
+
 	return 0;
 }
 
@@ -291,6 +297,11 @@ DEFINE_HOOK(0x55B4E1, LogicClass_Update_BeforeAll, 0x5)
 
 	ScenarioExt::Global()->UpdateAutoDeathObjectsInLimbo();
 	ScenarioExt::Global()->UpdateTransportReloaders();
+
+	// SuddenDeath kills are settled here. This is the head of the logic frame, before any object
+	// is updated, which is the first place a target can be destroyed without the destruction
+	// re-entering the code that is walking the object that was hit.
+	SuddenDeath::ExecutePending();
 
 	return 0;
 }

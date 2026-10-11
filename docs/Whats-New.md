@@ -734,6 +734,11 @@ HideShakeEffects=false           ; boolean
   - A freeze that is cut short only pays for the time it actually lasted, and a payment that would be lethal removes the target through the engine's warp erase instead of the normal death path, so there is no wreck and no `DeathWeapon`.
   - `Temporal.Interval` puts the caster on a cooldown of that many frames after a freeze ends: the target is released as soon as `Temporal.Duration` is over, and the caster's rearm timer is pushed out so it cannot start the next freeze early.
   - `Temporal.ZeroHealthAction=linger` makes a freeze unable to finish its target off - it sits at 1 HP until the freeze is over and is erased then - and `Temporal.KilledByOthers=erase` resolves a lethal hit from someone else as a warp erase instead of letting the target die the ordinary way.
+- [Sudden death warhead](New-or-Enhanced-Logics.md#sudden-death-warhead) (by laowang)
+  - `SuddenDeath=yes` on a warhead kills whatever its detonation reaches regardless of the damage dealt, `Verses`/armour, health and veterancy thresholds, `Immune=yes`, the Iron Curtain, the Force Shield or shields, and the same detonation clears the tiberium it covers, breaks the bridges it covers and removes the terrain objects it covers.
+  - The hit only records its target and the kill is executed at the head of the next logic frame, so nothing is destroyed inside the projectile detonation and the object bookkeeping there stays intact.
+  - `SuddenDeath.Mode=erase` deletes the target instead of killing it: no wreck, no `DeathWeapon`, no revenge weapon and no kill credit.
+  - A unit holding such a weapon can aim at and force-fire on `Immune=yes` objects, which vanilla refuses even with Ctrl held.
 
 #### Vanilla fixes:
 - [Armed engineers can attack](Fixed-or-Improved-Logics.md#armed-engineers-can-attack) (by laowang)

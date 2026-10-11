@@ -1,4 +1,5 @@
 #include "Body.h"
+#include "SuddenDeath.h"
 
 #include <Ext/Anim/Body.h>
 #include <Ext/SWType/Body.h>
@@ -42,6 +43,14 @@ void WarheadTypeExt::Detonate(TechnoClass* pOwner, HouseClass* pHouse, BulletExt
 {
 	InvokerGuard guard(this, pOwner);
 	auto const pBullet = pBulletExt ? pBulletExt->OwnerObject() : nullptr;
+
+	// SuddenDeath also reaches terrain, and terrain is the one thing the damage pipeline cannot
+	// touch: MapClass::DamageArea never calls into TerrainClass, and ObjectClass::ReceiveDamage is
+	// not virtual, so no warhead can be aimed at a tree or a tiberium pillar through it. The cells
+	// the warhead covers are therefore recorded here, at the detonation, and the terrain in them is
+	// removed at the safe point (SuddenDeath::ExecutePending) instead.
+	if (this->SuddenDeath)
+		SuddenDeath::RegisterTerrain(coords, this->OwnerObject()->CellSpread);
 
 	if (pBulletExt && pBulletExt->InterceptorTechnoType)
 		this->InterceptBullets(pOwner, pBullet, coords);

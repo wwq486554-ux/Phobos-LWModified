@@ -167,6 +167,33 @@ public:
 	CDTimerClass DelayedFireTimer;
 	AnimClass* CurrentDelayedFireAnim;
 
+	// --- ROFCurve ---
+	// Transient spin-up state of a ROFCurve weapon. One canister's worth of state: how far
+	// along the curve the current burst of fire has travelled, which weapon it belongs to,
+	// and what the previous shot was handed (its frame, and the effective rearm delay it
+	// produced). Together those two tell a continuing burst apart from a paused one.
+	//
+	// Deliberately NOT serialized. It describes a burst of fire in progress, so a save/load
+	// starts the curve over, which is what it looks like anyway. Leaving it out also keeps
+	// the savegame layout of previous builds intact, and both machines of a multiplayer
+	// session zero it from the same save, so it stays in sync.
+	WeaponTypeClass* ROFCurveWeapon;
+	double ROFCurveProgress;
+	int ROFCurveLastRearm;
+	int ROFCurveLastFrame;
+
+	// --- TankMakeupKit ---
+	// The look a Mirage-like vehicle took over from a MakesDisguise weapon hit. Vanilla keeps
+	// it only in TechnoClass::Disguise, which the mirage disguise cycle wipes on damage,
+	// movement or EMP and then refills from [General] DefaultMirageDisguises. Remembering the
+	// picked type here lets the re-disguise step put that look back instead of a random tree.
+	//
+	// Deliberately NOT serialized: a save/load drops the record, which sends the unit back to
+	// vanilla behaviour until it is hit by the weapon again, and it keeps the savegame layout
+	// of previous builds intact (same reasoning as the ROFCurve state above).
+	ObjectTypeClass* MakeupDisguise;
+	HouseClass* MakeupHouse;
+
 	AirstrikeClass* AirstrikeTargetingMe;
 
 	bool IsSelected;
@@ -328,6 +355,12 @@ public:
 		, TemporalFreeze {}
 		, TemporalLingerSaved { false }
 		, TemporalErasePending { false }
+		, ROFCurveWeapon { nullptr }
+		, ROFCurveProgress { 0.0 }
+		, ROFCurveLastRearm { 0 }
+		, ROFCurveLastFrame { 0 }
+		, MakeupDisguise { nullptr }
+		, MakeupHouse { nullptr }
 	{ }
 
 	void OnEarlyUpdate();

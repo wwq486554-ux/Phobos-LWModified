@@ -170,12 +170,27 @@ DEFINE_HOOK(0x6F72D2, TechnoClass_IsCloseEnoughToTarget_OpenTopped_RangeBonus, 0
 {
 	GET(TechnoClass* const, pThis, ESI);
 
+	// Both sides of this read are resolved defensively. A `Transporter` that is not null but
+	// is no longer a live, extension-backed TechnoClass used to make the direct Fetch below
+	// dereference a null `TypeExtData` at +0x18, which crashed inside the per-frame object
+	// update (observed in game as Phobos.dll+0xA0116, access address 0x18, call chain through
+	// LogicClass_AI_UpdateObjects). Falling back to the plain range bonus only loses a
+	// cosmetic bonus and keeps the frame alive.
 	if (auto const pTransport = pThis->Transporter)
 	{
-		auto const pExt = TechnoExt::Fetch(pTransport)->TypeExtData;
-		const int rangeBonus = pExt->OpenTopped_RangeBonus.Get(RulesClass::Instance->OpenToppedRangeBonus);
+		auto const pTransportExt = TechnoExt::TryFetch(pTransport);
 
-		R->EAX(rangeBonus + TechnoExt::Fetch(pThis)->TypeExtData->OpenTransport_RangeBonus.Get(RulesExt::Global()->OpenTransport_RangeBonus));
+		if (!pTransportExt || !pTransportExt->TypeExtData)
+			return 0;
+
+		const int rangeBonus = pTransportExt->TypeExtData->OpenTopped_RangeBonus.Get(RulesClass::Instance->OpenToppedRangeBonus);
+
+		auto const pThisExt = TechnoExt::TryFetch(pThis);
+
+		if (!pThisExt || !pThisExt->TypeExtData)
+			return 0;
+
+		R->EAX(rangeBonus + pThisExt->TypeExtData->OpenTransport_RangeBonus.Get(RulesExt::Global()->OpenTransport_RangeBonus));
 		return 0x6F72DE;
 	}
 

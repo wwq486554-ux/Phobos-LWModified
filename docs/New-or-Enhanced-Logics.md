@@ -5192,6 +5192,37 @@ OmniFire.TurnToTarget=       ; boolean, default to [General] -> OmniFire.TurnToT
 
 - In addition to allowing custom radiation types, several enhancements are also available to the default radiation type defined in `[Radiation]`, such as ability to set owner & invoker or deal damage against buildings. See [Custom Radiation Types](#custom-radiation-types) for more details.
 
+### ROF curve (weapon level spin-up)
+
+- A weapon can fire faster the longer it keeps firing. This is the vanilla gattling idea moved from the unit onto the weapon: it is the same weapon from the first shot to the last, nothing is swapped and no staged weapon list is involved, so every weapon type can carry its own curve.
+- Only the delay between two shots changes. The projectile, the firing animation, the report, the warhead and the damage are untouched.
+- The curve runs from `ROFCurve.Start` (the slow end) to `ROFCurve.End` (the fast end) over `ROFCurve.Ramp` frames. `ROFCurve.Power` shapes how it gets there: `1.0` is a straight line, above `1.0` stays near the slow end and then accelerates, below `1.0` speeds up immediately.
+- `ROFCurve.Decay` brings the curve back down once the weapon stops firing: after that many frames without a shot the progress has fallen back to the start. `ROFCurve.Decay=0` resets it at once.
+- `ROFCurve.Cycle` decides what reaching the fast end means: `no` holds the weapon at `End`, `yes` restarts the curve from `Start`.
+- The curve is applied as a ratio to the reload delay the engine had already computed, so everything else that shapes the firing rate - the `AttachEffect` ROF multiplier, veterancy and `ROF.RandomDelay` - keeps working. For the same reason a berzerk unit's own halving is applied on top of the curve rather than replacing it.
+- Only the interval between two reloads is affected, so on a `Burst` weapon this is the interval between bursts, not the delay inside a burst.
+- The progress is per weapon in progress and is not saved: loading a save starts the curve over, which is what it looks like anyway.
+- A weapon that uses `SweepFire` is left alone, because that feature owns the same reload value.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWEAPON]                 ; WeaponType
+ROFCurve=no                  ; boolean
+ROFCurve.Start=              ; integer, frames, default to the weapon's own ROF
+ROFCurve.End=                ; integer, frames, required
+ROFCurve.Ramp=30             ; integer, frames
+ROFCurve.Power=1.0           ; floating point
+ROFCurve.Decay=0             ; integer, frames
+ROFCurve.Cycle=no            ; boolean
+```
+
+```{note}
+- `ROFCurve.End` has to be set; without it the weapon is treated as not having a curve and keeps its normal rate of fire.
+- `ROFCurve.Power` is clamped to `[0.1, 10.0]`, and a non-positive `Ramp` falls back to the default.
+- A shot whose reload delay the engine computed as less than one frame is left alone rather than scaled.
+- With `ROFCurve.Cycle=yes` the curve restarts as soon as it reaches the fast end, so the weapon drops back to the slow rate for one shot.
+```
+
 ### Range finding in cylinder
 
 - In vanilla, technos in air will ignore the distance in Z axis when checking if the target is in range. Now you can use the following flags to make technos always range finding like that.
@@ -5235,6 +5266,32 @@ Strafing.SimulateBurst=        ; boolean, default to [General] -> Strafing.Simul
 Strafing.UseAmmoPerShot=       ; boolean, default to [General] -> Strafing.UseAmmoPerShot
 Strafing.TargetCell=           ; boolean, default to [General] -> Strafing.TargetCell
 Strafing.EndDelay=             ; integer, game frames
+```
+
+### Tank makeup kit (vehicle disguise as the unit it hits)
+
+- Revives the makeup kit the original game left half-finished: a vehicle that fires a warhead with `MakesDisguise=yes` takes on the look of the unit it hit. Vanilla only ever handled a target that was *already* disguised, so against an ordinary vehicle the abandoned feature did nothing at all.
+- The look is taken from the target that was hit - its type and the house that owns it, so the colours follow - and a target that is itself disguised is copied as it looks rather than as what it really is.
+- Terrain objects work as well: a shot at a tree or a utility pole keeps that exact terrain type.
+- Keeping the look works like the Mirage Tank's own disguise: it stays on while the unit sits still and is revealed when the unit is damaged (for `2 x damage` frames), moves, is hit by an EMP or is flipped - but where the engine would then roll a random entry from `[General] DefaultMirageDisguises`, the look the weapon picked is put back, so the vehicle returns to the designated appearance instead of a default tree.
+- A `RemoveDisguise=yes` warhead cannot take the picked look away either, for the same reason.
+- Only vehicles take part, and only those that are already part of the mirage disguise cycle (`CanDisguise=yes` without `PermaDisguise`). Spies and the vanilla `DefaultDisguise` behaviour are untouched, as is the vanilla `DefaultMirageDisguises` roll for anything without a remembered look.
+- The remembered look is not saved: loading a save sends the unit back to the ordinary mirage behaviour until it uses such a weapon again.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWARHEAD]                ; WarheadType
+MakesDisguise=yes            ; boolean - the vanilla flag, until now only effective against spies
+
+[SOMEVEHICLE]                ; VehicleType
+CanDisguise=yes              ; boolean - required, this is what enters the unit into the mirage disguise cycle
+DisguiseWhenStill=yes        ; boolean - required, the look is only put back while the unit is not moving
+```
+
+```{note}
+- The disguise is applied to the *shooter*, exactly like a spy's disguise, and is taken from the *target*.
+- Any warhead with `MakesDisguise=yes` works, not just the classic `[TankSnapshot]`; the weapon still has to be able to hit the intended target (`Versus=`, and `TerrainFire=yes` for terrain objects).
+- SHP-drawn vehicles (`Voxel=no`) are not verified: expect the wrong frames to be drawn. Voxel vehicles draw the disguised model correctly. The turret of a disguised type has not been verified either.
 ```
 
 ### Visual effect scatter

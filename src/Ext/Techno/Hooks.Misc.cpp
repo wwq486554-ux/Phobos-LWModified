@@ -570,16 +570,83 @@ DEFINE_HOOK(0x522790, InfantryClass_ClearDisguise_DefaultDisguise, 0x6)
 	return 0;
 }
 
+// TankMakeupKit: make a vehicle copy the look of the unit it just hit.
+// Vanilla UnitClass::DisguiseAs handles a Unit target only while that target is *already*
+// disguised - the leftover half of the abandoned Mirage Tank "makeup kit" - and does nothing
+// otherwise. Fill in the missing case: take the target's type and owning house as the new
+// disguise, then hand back to the vanilla tail (0x746704). That tail stores DisguisedAsHouse
+// and calls TechnoClass::DisguiseAs, which the hook below records as a makeup.
+DEFINE_HOOK(0x7466D8, UnitClass_DisguiseAs_DisguiseUnit, 0xA)
+{
+	enum { CopyTargetDisguise = 0x7466E6, ApplyVanillaTail = 0x746704 };
+
+	GET(UnitClass*, pThis, EDI);
+	GET(UnitClass*, pTarget, ESI);
+
+	if (pTarget->IsDisguised())
+		return CopyTargetDisguise;
+
+	pThis->Disguise = pTarget->Type;
+	R->EAX(pTarget->GetOwningHouse());
+	return ApplyVanillaTail;
+}
+
+// TankMakeupKit: remember the look while it is being applied.
+// All three branches of UnitClass::DisguiseAs, plus InfantryClass::DisguiseAs, funnel into
+// TechnoClass::DisguiseAs with Disguise/DisguisedAsHouse already written, so recording here
+// covers vehicle, terrain object and already-disguised targets in one place. Units only: a
+// record lets its owner outrank the mirage re-disguise cycle below, while infantry (spies)
+// keep their vanilla disguise semantics - including RemoveDisguise - untouched.
+DEFINE_HOOK(0x70E280, TechnoClass_DisguiseAs_RecordMakeup, 0x6)
+{
+	GET(TechnoClass*, pThis, ECX);
+	GET_STACK(AbstractClass*, pTarget, 0x4);
+
+	if (pTarget && pThis->WhatAmI() == AbstractType::Unit)
+	{
+		auto const pExt = TechnoExt::Fetch(pThis);
+		pExt->MakeupDisguise = pThis->Disguise;
+		pExt->MakeupHouse = pThis->DisguisedAsHouse;
+	}
+
+	// Replaces "mov eax,[esp+4] / test eax,eax / je ...", so both exits are reproduced.
+	return pTarget ? 0x70E288 : 0x70E29A;
+}
+
 DEFINE_HOOK(0x746A30, UnitClass_UpdateDisguise_DefaultMirageDisguises, 0x5)
 {
-	enum { Apply = 0x746A6C };
+	enum { Apply = 0x746A6C, FinishBlink = 0x746A9C };
 
 	GET(UnitClass*, pThis, ESI);
+
+	// The random default tree is still rolled first: Random::Range is rejection sampled and
+	// draws nothing at all when min == max, so skipping it would move the shared RNG stream
+	// off what the engine expects.
 	const auto& disguises = UnitTypeExt::Fetch(pThis->Type)->DefaultMirageDisguises.GetElements(RulesClass::Instance->DefaultMirageDisguises);
 	TerrainTypeClass* pDisguiseAs = nullptr;
 
 	if (const int size = static_cast<int>(disguises.size()))
 		pDisguiseAs = disguises[ScenarioClass::Instance->Random.RandomRanged(0, size - 1)];
+
+	// TankMakeupKit: a look picked up from a MakesDisguise weapon hit outranks the default
+	// tree, so being hit, moving or EMP'ed brings that look back instead of a random tree.
+	// This step only runs while the unit is not disguised, which is exactly when the engine
+	// has just dropped the disguise.
+	auto const pExt = TechnoExt::Fetch(pThis);
+
+	if (auto const pMakeup = pExt->MakeupDisguise)
+	{
+		pThis->Disguise = pMakeup;
+		pThis->DisguisedAsHouse = pExt->MakeupHouse;
+		pThis->Disguised = true;
+		pThis->DisguiseCreationFrame = Unsorted::CurrentFrame;
+
+		// The vanilla apply block ends with this call (0x70CCF0, vtable +0x49C): mark the
+		// cell for redraw so the new shape is what gets drawn this frame.
+		reinterpret_cast<void(__thiscall*)(UnitClass*)>(0x70CCF0)(pThis);
+
+		return FinishBlink;
+	}
 
 	R->EAX(pDisguiseAs);
 	return Apply;

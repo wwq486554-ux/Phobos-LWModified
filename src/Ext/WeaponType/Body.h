@@ -138,6 +138,31 @@ public:
 	// on and off, which is how the two can be compared without guessing.
 	Valueable<bool> SweepFire_ControlProbe;
 
+	// --- ROFCurve ---
+	// Weapon-level "spin-up": one and the same weapon fires faster the longer it keeps
+	// firing. Only the ROF changes - the projectile, animation, sound, warhead and damage
+	// are untouched, and unlike the vanilla gattling system no weapon is ever swapped.
+	//
+	// The curve is followed from ROFCurve.Start to ROFCurve.End over ROFCurve.Ramp frames,
+	// eased by ROFCurve.Power, and it decays back over ROFCurve.Decay frames once the weapon
+	// stops firing. ROFCurve.Cycle decides whether reaching the top restarts the curve.
+	// All values are in logic frames (15 per second).
+	//
+	// Start and End are Nullable on purpose: an absent Start means "the weapon's own ROF",
+	// and an absent End means the weapon has not configured a curve at all.
+	Valueable<bool> ROFCurve_Enabled;
+	Nullable<int> ROFCurve_Start;
+	Nullable<int> ROFCurve_End;
+	Valueable<int> ROFCurve_Ramp;
+	Valueable<double> ROFCurve_Power;
+	Valueable<int> ROFCurve_Decay;
+	Valueable<bool> ROFCurve_Cycle;
+
+	// Resolved while the INI is read, once: what the curve actually means, and whether it is
+	// usable at all. The per-shot hook reads only these, never the raw keys.
+	bool ROFCurve_IsUsable = false;
+	int ROFCurve_ResolvedStart = 0;
+
 	Nullable<bool> CylinderRangefinding;
 	
 	WeaponTypeExt(WeaponTypeClass* OwnerObject) : AbstractTypeExt(OwnerObject)
@@ -243,6 +268,13 @@ public:
 		, SweepFire_ShotAtEnd { false }
 		, SweepFire_InfantryFireAnim { true }
 		, SweepFire_ControlProbe { false }
+		, ROFCurve_Enabled { false }
+		, ROFCurve_Start {}
+		, ROFCurve_End {}
+		, ROFCurve_Ramp { 30 }
+		, ROFCurve_Power { 1.0 }
+		, ROFCurve_Decay { 0 }
+		, ROFCurve_Cycle { false }
 	{ }
 
 	int GetBurstDelay(int burstIndex) const;

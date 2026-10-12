@@ -422,6 +422,14 @@ HideShakeEffects=false           ; boolean
 :open:
 
 #### New:
+- [Tank makeup kit](New-or-Enhanced-Logics.md#tank-makeup-kit-vehicle-disguise-as-the-unit-it-hits) (by laowang)
+  - A vehicle firing a `MakesDisguise=yes` warhead takes on the look of the unit it hit, reviving the makeup kit the original game left half-finished: vanilla only handled a target that was already disguised, so an ordinary vehicle target did nothing at all.
+  - The picked look - a vehicle type or a terrain object, with the target house's colours - is remembered, so the reveal that damage, movement or an EMP causes is followed by that look coming back instead of a random `[General] DefaultMirageDisguises` tree. `RemoveDisguise` warheads cannot take it away either.
+  - Vehicles only, and only those in the mirage disguise cycle; spies and the `DefaultDisguise`/`DefaultMirageDisguises` behaviour are untouched. The remembered look is not saved.
+- [ROF curve](New-or-Enhanced-Logics.md#rof-curve-weapon-level-spin-up) (by laowang)
+  - A weapon fires faster the longer it keeps firing, without ever swapping weapons: `ROFCurve.Start` / `ROFCurve.End` / `ROFCurve.Ramp` describe the curve and `ROFCurve.Power` its shape, so any weapon can spin up instead of only gattling units with a staged weapon list.
+  - `ROFCurve.Decay` brings the rate back down after the weapon stops firing, and `ROFCurve.Cycle` decides whether the fast end holds there or starts the curve over.
+  - Only the reload delay changes - the projectile, animation, report, warhead and damage are untouched, and the engine's other rate modifiers keep working.
 - [Tactical view zoom](User-Interface.md#tactical-view-zoom) (by laowang)
   - The tactical map is rendered at a resolution of its own, so it can be zoomed in and out while the UI keeps the resolution the game is set to. Zooming in magnifies a centred crop of the native viewport; zooming out really renders a larger viewport, so the engine draws the cells that were outside the native view - the map is not stretched.
   - `ViewZoom.Levels` is a configurable table of map resolution multipliers, with a runtime whole-map level that is fitted and letterboxed into the map area. Every match starts at the level that matches the resolution, and the resolution stored in the game options is never modified.
@@ -833,6 +841,7 @@ HideShakeEffects=false           ; boolean
 - Fixed the issue of significant lagging caused by frequent lighting updates due to the accumulation of a large amount of radsite in a short time (by NetsuNegi)
 
 #### Phobos fixes:
+- Fixed a crash in the per-frame object update when an `OpenTopped` unit's `Transporter` is no longer a live object: the range bonus hook now checks that both sides still carry an extension and falls back to the plain range bonus instead of dereferencing a null `TypeExtData` (by laowang)
 - [Fixed the weapon index displacement that kept units with `Inviso` projectiles from targeting water and cliff tiles](Fixed-or-Improved-Logics.md#bugfixes-and-miscellaneous) (by Noble_Fish)
 - Corrected the hook sizes that made Syringe rebuild a truncated instruction sequence (`faulty return 0 hook` in `syringe.log`) at `0x6FE3F1`, `0x6FE421`, `0x4400F9`, `0x73769E`, `0x423855`, `0x6A84DB`, `0x6A86ED` and `0x6FD4ED` (by laowang)
 - Fixed the bug that `AllowAirstrike=no` cannot completely prevent air strikes from being launched against it (by NetsuNegi)

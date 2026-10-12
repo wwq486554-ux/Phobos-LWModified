@@ -256,6 +256,26 @@ void WeaponTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->SweepFire_InfantryFireAnim.Read(exINI, pSection, "SweepFire.InfantryFireAnim");
 	this->SweepFire_ControlProbe.Read(exINI, pSection, "SweepFire.ControlProbe");
 
+	// ROFCurve
+	this->ROFCurve_Enabled.Read(exINI, pSection, "ROFCurve");
+	this->ROFCurve_Start.Read(exINI, pSection, "ROFCurve.Start");
+	this->ROFCurve_End.Read(exINI, pSection, "ROFCurve.End");
+	this->ROFCurve_Ramp.Read(exINI, pSection, "ROFCurve.Ramp");
+	this->ROFCurve_Power.Read(exINI, pSection, "ROFCurve.Power");
+	this->ROFCurve_Decay.Read(exINI, pSection, "ROFCurve.Decay");
+	this->ROFCurve_Cycle.Read(exINI, pSection, "ROFCurve.Cycle");
+
+	// Resolve the curve once, where the INI has just been read. The per-shot hook reads only
+	// the two resolved values, never the raw keys.
+	{
+		const bool startResolved = this->ROFCurve_Start.isset();
+		const int startValue = startResolved ? this->ROFCurve_Start.Get() : pThis->ROF;
+		const bool endValid = this->ROFCurve_End.isset() && this->ROFCurve_End.Get() >= 1;
+
+		this->ROFCurve_IsUsable = this->ROFCurve_Enabled && endValid;
+		this->ROFCurve_ResolvedStart = Math::max(startValue, 1);
+	}
+
 	if (this->SweepFire_Enable)
 	{
 		// Always echo the resolved configuration for opted-in weapons. This is the
@@ -414,6 +434,13 @@ void WeaponTypeExt::Serialize(T& Stm)
 		.Process(this->SweepFire_ShotAtEnd)
 		.Process(this->SweepFire_InfantryFireAnim)
 		.Process(this->SweepFire_ControlProbe)
+		.Process(this->ROFCurve_Enabled)
+		.Process(this->ROFCurve_Start)
+		.Process(this->ROFCurve_End)
+		.Process(this->ROFCurve_Ramp)
+		.Process(this->ROFCurve_Power)
+		.Process(this->ROFCurve_Decay)
+		.Process(this->ROFCurve_Cycle)
 		;
 };
 

@@ -1015,6 +1015,139 @@ DEFINE_HOOK(0x6FF29E, TechnoClass_FireAt_ChargeTurret2, 0x6)
 	return SkipGameCode;
 }
 
+// ROFCurve - weapon-level spin-up: the weapon fires faster the longer it keeps firing.
+//
+// The value that paces the next shot is RearmTimer.TimeLeft. In TechnoClass::FireWeapon the
+// engine stores it at 0x6FF2BB (`lea edx,[esi+0x2EC]` then `mov [edx+8],eax`), and the value
+// it stores is the EAX produced by the CalculateROF call at 0x6FF289. This hook sits at
+// 0x6FF29E - a point on every ROF-driven firing path, which is exactly where SweepFire's
+// composite reload replaces EAX for the same reason - and scales that EAX, so the engine
+// stores the curved delay.
+//
+// Do NOT confuse the two stores: 0x6FE4A4 and 0x6FF29E both write [esi+0x2F8], which is
+// ChargeTurretDelay (turret animation only), not RearmTimer (TechnoClass.h:697-698;
+// RearmTimer=+0x2EC/TimeLeft=+0x2F4, ChargeTurretDelay=+0x2F8). Setting the timer there, as
+// earlier attempts did, has no effect on the rate of fire at all.
+//
+// The curve is applied as a ratio against the weapon's own ROF, so every other modifier the
+// engine folded into EAX (AttachEffect ROF multiplier, veterancy, ROF.RandomDelay) stays
+// intact. This address already carries Phobos' TechnoClass_FireAt_ChargeTurret2 hook;
+// handlers on one address each see the original registers, and this one returns 0 and only
+// rewrites EAX for a weapon that asked for a curve. Berzerk's halving is dropped along with
+// the vanilla value, exactly as SweepFire documents (D-29).
+static void ApplyROFCurve(TechnoClass* pThis, WeaponTypeClass* pWeapon, int& rearmDelay)
+{
+	auto const pExt = TechnoExt::TryFetch(pThis);
+	auto const pExtW = pWeapon ? WeaponTypeExt::TryFetch(pWeapon) : nullptr;
+
+	if (!pExt || !pExtW)
+		return;
+
+	// No curve, or a curve that cannot run: drop the state so a later weapon on the same unit
+	// starts from scratch, and leave the engine's value alone.
+	if (!pExtW->ROFCurve_IsUsable || pExtW->IsSweepFireEnabled())
+	{
+		pExt->ROFCurveWeapon = nullptr;
+		pExt->ROFCurveProgress = 0.0;
+		pExt->ROFCurveLastRearm = 0;
+		pExt->ROFCurveLastFrame = 0;
+
+		return;
+	}
+
+	// A delay below one frame is not a delay this weapon can be paced by, and scaling it would
+	// turn an already unusable value into a faster one. Leave it exactly as it is.
+	if (rearmDelay < 1)
+		return;
+
+	const int now = Unsorted::CurrentFrame;
+	const int baseRof = Math::max(pWeapon->ROF, 1);
+
+	// A burst is continuing when the same weapon fires again no later than a few frames after
+	// the interval it was last handed. The slack absorbs the frame the rearm timer needs to
+	// expire and ordinary scheduling jitter, and firing at a different target does not break
+	// the chain.
+	constexpr int ContinuitySlack = 3;
+	const bool continuing = pExt->ROFCurveWeapon == pWeapon
+		&& now - pExt->ROFCurveLastFrame <= pExt->ROFCurveLastRearm + ContinuitySlack;
+
+	// The gap is how much time actually passed, so the spin-up follows real time when the
+	// engine holds a shot back and the decay follows real idle time when it fires at nothing.
+	const int gap = Math::max(now - pExt->ROFCurveLastFrame, 0);
+
+	if (continuing)
+	{
+		pExt->ROFCurveProgress += static_cast<double>(gap) / pExtW->ROFCurve_Ramp;
+	}
+	else if (pExtW->ROFCurve_Decay > 0)
+	{
+		pExt->ROFCurveProgress -= static_cast<double>(gap) / pExtW->ROFCurve_Decay;
+	}
+	else
+	{
+		pExt->ROFCurveProgress = 0.0;
+	}
+
+	pExt->ROFCurveWeapon = pWeapon;
+	pExt->ROFCurveLastFrame = now;
+	pExt->ROFCurveProgress = std::clamp(pExt->ROFCurveProgress, 0.0, 1.0);
+
+	// Reaching the top either holds (Cycle=no) or starts the curve over (Cycle=yes).
+	if (pExtW->ROFCurve_Cycle && pExt->ROFCurveProgress >= 1.0)
+		pExt->ROFCurveProgress = 0.0;
+
+	const double ease = std::pow(pExt->ROFCurveProgress, pExtW->ROFCurve_Power);
+	const double curveRof = pExtW->ROFCurve_ResolvedStart
+		+ (pExtW->ROFCurve_End.Get() - pExtW->ROFCurve_ResolvedStart) * ease;
+
+	rearmDelay = Math::max(1, static_cast<int>(std::lround(
+		rearmDelay * curveRof / static_cast<double>(baseRof))));
+
+	pExt->ROFCurveLastRearm = rearmDelay;
+}
+
+// The two instructions that take the address of RearmTimer, one per branch of Fire_At:
+//   0x6FE4B0  lea edx,[esi+0x2EC]   (DiskLaser side of the branch at 0x6FE468)
+//   0x6FF2AA  lea edx,[esi+0x2EC]   (every other weapon - the common path)
+// The next writes are `mov [edx],frame`, `mov [edx+4],...` and finally `mov [edx+8],eax`,
+// i.e. RearmTimer.TimeLeft (+0x2F4) is started from EAX. Between the lea and that store
+// nothing touches EAX, so rewriting EAX here is what changes the delay the engine applies.
+//
+// Both are 6-byte LEAs and are hooked with size 6, matching the existing hooks in this file.
+// This matters: Syringe writes the jump-back target as hook+5 regardless of `size`, so a site
+// whose instruction is shorter than 5 bytes (e.g. `mov [edx+8],eax` is 3) resumes in the
+// middle of the following instruction and corrupts the instruction stream. That mistake was
+// made here before and crashed the game in InfantryClass::Fire_At right after Fire_At returned.
+//
+// Do NOT hook the `mov [esi+0x2F8],eax` instructions (0x6FE4A4 / 0x6FF29E) for the curve:
+// +0x2F8 is ChargeTurretDelay, a turret animation timer that does not affect the rate of fire
+// (TechnoClass.h:697-698; RearmTimer=+0x2EC/TimeLeft=+0x2F4, ChargeTurretDelay=+0x2F8).
+DEFINE_HOOK(0x6FE4B0, TechnoClass_FireAt_ROFCurve_DiskLaser, 0x6)
+{
+	GET(TechnoClass* const, pThis, ESI);
+	GET(WeaponTypeClass* const, pWeapon, EBX);
+	GET(const int, engineRearm, EAX);
+
+	int rearmDelay = engineRearm;
+	ApplyROFCurve(pThis, pWeapon, rearmDelay);
+	R->EAX(rearmDelay);
+
+	return 0;
+}
+
+DEFINE_HOOK(0x6FF2AA, TechnoClass_FireAt_ROFCurve, 0x6)
+{
+	GET(TechnoClass* const, pThis, ESI);
+	GET(WeaponTypeClass* const, pWeapon, EBX);
+	GET(const int, engineRearm, EAX);
+
+	int rearmDelay = engineRearm;
+	ApplyROFCurve(pThis, pWeapon, rearmDelay);
+	R->EAX(rearmDelay);
+
+	return 0;
+}
+
 #pragma endregion
 
 DEFINE_HOOK(0x70FDF5, TechnoClass_DrawDrainAnimation_Custom, 0x6)

@@ -176,6 +176,21 @@ DEFINE_HOOK(0x6F72D2, TechnoClass_IsCloseEnoughToTarget_OpenTopped_RangeBonus, 0
 	// update (observed in game as Phobos.dll+0xA0116, access address 0x18, call chain through
 	// LogicClass_AI_UpdateObjects). Falling back to the plain range bonus only loses a
 	// cosmetic bonus and keeps the frame alive.
+	//
+	// PROVENANCE (keep this note if the guard is ever touched): that crash was hit while the
+	// first SuddenDeath implementation was in the tree - it dealt a unit its own health as
+	// damage and destroyed objects inside the damage pipeline, which left object lifetimes
+	// inconsistent. SuddenDeath was later rewritten to record its hits and settle them at the
+	// head of the next logic frame through the ordinary death path (and through
+	// KillPassengers when it erases), and the dangling Transporter it produced has not been
+	// observed since. So THIS IS NOT A VERIFIED FIX for a live bug: it is a defensive net kept
+	// because a raw Transporter dereference has no lifetime guarantee (the savegame load window
+	// is one documented state where an extension may legitimately be missing) and giving up a
+	// cosmetic range bonus is cheaper than a crash. If it is ever removed, the sibling reads
+	// (three more sites, all equally unguarded) should be decided on together:
+	// TemporalClass_AI_Opentopped_WarpDistance in this file, and
+	// TechnoClass_CanFire_RevertAresOpenTopCloakFix / TechnoClass_CanFire_OpenTopCloakFix
+	// in Hooks.Cloak.cpp.
 	if (auto const pTransport = pThis->Transporter)
 	{
 		auto const pTransportExt = TechnoExt::TryFetch(pTransport);

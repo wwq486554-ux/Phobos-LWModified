@@ -841,7 +841,7 @@ HideShakeEffects=false           ; boolean
 - Fixed the issue of significant lagging caused by frequent lighting updates due to the accumulation of a large amount of radsite in a short time (by NetsuNegi)
 
 #### Phobos fixes:
-- Fixed a crash in the per-frame object update when an `OpenTopped` unit's `Transporter` is no longer a live object: the range bonus hook now checks that both sides still carry an extension and falls back to the plain range bonus instead of dereferencing a null `TypeExtData` (by laowang)
+- Hardened the `OpenTopped` range bonus hook: a `Transporter` that is no longer a live object now falls back to the plain range bonus instead of dereferencing a null `TypeExtData` at +0x18. Defensive, not a verified fix - the crash that motivated it came from the first `SuddenDeath` implementation (which destroyed objects inside the damage pipeline) and has not been observed since that feature was rewritten (by laowang)
 - [Fixed the weapon index displacement that kept units with `Inviso` projectiles from targeting water and cliff tiles](Fixed-or-Improved-Logics.md#bugfixes-and-miscellaneous) (by Noble_Fish)
 - Corrected the hook sizes that made Syringe rebuild a truncated instruction sequence (`faulty return 0 hook` in `syringe.log`) at `0x6FE3F1`, `0x6FE421`, `0x4400F9`, `0x73769E`, `0x423855`, `0x6A84DB`, `0x6A86ED` and `0x6FD4ED` (by laowang)
 - Fixed the bug that `AllowAirstrike=no` cannot completely prevent air strikes from being launched against it (by NetsuNegi)

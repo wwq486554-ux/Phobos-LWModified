@@ -1248,6 +1248,105 @@ namespace
 	}
 }
 
+// --- ROF curve: the shape, defined once -----------------------------------------------
+//
+// The curve runs from ROFCurve.Start (progress 0) to ROFCurve.End (progress 1) over
+// ROFCurve.Ramp frames, eased by ROFCurve.Power. Neither end has to be the slow one: the shape
+// is symmetric, so a weapon may just as well fire fastest first and slow down. The value is
+// returned as a ratio to the weapon's own ROF, which is exactly how the reload hook applies it.
+namespace
+{
+	double GetROFCurveRofRatio(double progress, WeaponTypeClass* pWeapon, WeaponTypeExt* pWeaponExt)
+	{
+		const double ease = std::pow(std::clamp(progress, 0.0, 1.0), pWeaponExt->ROFCurve_Power);
+		const double curveRof = pWeaponExt->ROFCurve_ResolvedStart
+			+ (pWeaponExt->ROFCurve_End.Get() - pWeaponExt->ROFCurve_ResolvedStart) * ease;
+
+		return curveRof / static_cast<double>(Math::max(pWeapon->ROF, 1));
+	}
+}
+
+double TechnoExt::StepROFCurve(WeaponTypeClass* pWeapon)
+{
+	if (!pWeapon)
+		return 1.0;
+
+	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
+
+	// No curve, or one that cannot run: drop the state so a later weapon on the same unit starts
+	// from scratch.
+	if (!pWeaponExt || !pWeaponExt->ROFCurve_IsUsable)
+	{
+		this->ROFCurveWeapon = nullptr;
+		this->ROFCurveProgress = 0.0;
+		this->ROFCurveLastRearm = 0;
+		this->ROFCurveLastFrame = 0;
+
+		return 1.0;
+	}
+
+	const int now = Unsorted::CurrentFrame;
+
+	// A burst is continuing when the same weapon fires again no later than a few frames after
+	// the interval it was last handed. The slack absorbs the frame the rearm timer needs to
+	// expire and ordinary scheduling jitter, and firing at a different target does not break
+	// the chain.
+	//
+	// ROFCurveLastRearm is "the gap this chain expects to the next shot" rather than literally
+	// the engine's reload: a feature that paces the weapon over a longer cycle (a Temporal
+	// freeze, which holds the target far beyond the reload) writes its own expectation there,
+	// so its shots still count as one continuous chain.
+	constexpr int ContinuitySlack = 3;
+	const bool continuing = this->ROFCurveWeapon == pWeapon
+		&& now - this->ROFCurveLastFrame <= this->ROFCurveLastRearm + ContinuitySlack;
+
+	// The gap is how much time actually passed, so the spin-up follows real time when the
+	// engine holds a shot back and the decay follows real idle time when it fires at nothing.
+	const int gap = Math::max(now - this->ROFCurveLastFrame, 0);
+
+	if (continuing)
+	{
+		this->ROFCurveProgress += static_cast<double>(gap) / pWeaponExt->ROFCurve_Ramp;
+	}
+	else if (pWeaponExt->ROFCurve_Decay > 0)
+	{
+		this->ROFCurveProgress -= static_cast<double>(gap) / pWeaponExt->ROFCurve_Decay;
+	}
+	else
+	{
+		this->ROFCurveProgress = 0.0;
+	}
+
+	this->ROFCurveWeapon = pWeapon;
+	this->ROFCurveLastFrame = now;
+	this->ROFCurveProgress = std::clamp(this->ROFCurveProgress, 0.0, 1.0);
+
+	// Reaching the top either holds (Cycle=no) or starts the curve over (Cycle=yes).
+	if (pWeaponExt->ROFCurve_Cycle && this->ROFCurveProgress >= 1.0)
+		this->ROFCurveProgress = 0.0;
+
+	return GetROFCurveRofRatio(this->ROFCurveProgress, pWeapon, pWeaponExt);
+}
+
+int TechnoExt::ScaleByROFCurve(int frames, WeaponTypeClass* pWeapon) const
+{
+	// A frame count that is not a delay (0 = the feature is off) has to stay 0 instead of
+	// turning into one frame of wait that the INI never asked for.
+	if (frames <= 0 || !pWeapon)
+		return frames;
+
+	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
+
+	// Only a weapon that has already put this techno on the curve may scale a frame count: the
+	// state belongs to that chain, so a weapon that never fired it is left alone.
+	if (!pWeaponExt || !pWeaponExt->ROFCurve_IsUsable || this->ROFCurveWeapon != pWeapon)
+		return frames;
+
+	const double ratio = GetROFCurveRofRatio(this->ROFCurveProgress, pWeapon, pWeaponExt);
+
+	return Math::max(1, static_cast<int>(std::lround(frames * ratio)));
+}
+
 CellClass* TechnoExt::TryStartSweepFire(WeaponTypeClass* pWeapon, int weaponIndex, AbstractClass* pTarget, int burstIndex, CoordStruct* pLineStartOut)
 {
 	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
@@ -1397,10 +1496,17 @@ CellClass* TechnoExt::TryStartSweepFire(WeaponTypeClass* pWeapon, int weaponInde
 	// Frames the aim point needs to walk the whole line.
 	const int sweepFrames = Math::max(1, static_cast<int>(std::ceil(lineLength / speed)));
 
+	// The ROF curve paces the cooldown between two sweeps, and this shot is the one that starts
+	// the chain, so the curve has to be advanced here - not in the reload hook, which runs later
+	// on the same frame (0x6FF2AA against this hook's 0x6FE4F6). ScaleByROFCurve is a no-op
+	// unless the weapon carries a curve, so a weapon without one keeps its plain cooldown.
+	this->StepROFCurve(pWeapon);
+	const int cooldown = this->ScaleByROFCurve(pWeaponExt->SweepFire_Cooldown.Get(), pWeapon);
+
 	if (SweepFireDiag::Allowed())
 	{
-		Debug::Log("[SweepFire] %s: sweep started burst=%d slot=%d length=%d frames=%d interval=%d mirror=%d source=(%d,%d,%d) target=(%d,%d,%d)\n",
-			pWeapon->ID, burstIndex, weaponIndex, static_cast<int>(lineLength), sweepFrames, shotInterval, mirrored ? 1 : 0,
+		Debug::Log("[SweepFire] %s: sweep started burst=%d slot=%d length=%d frames=%d interval=%d cooldown=%d mirror=%d source=(%d,%d,%d) target=(%d,%d,%d)\n",
+			pWeapon->ID, burstIndex, weaponIndex, static_cast<int>(lineLength), sweepFrames, shotInterval, cooldown, mirrored ? 1 : 0,
 			lineSource.X, lineSource.Y, lineSource.Z, lineTarget.X, lineTarget.Y, lineTarget.Z);
 	}
 
@@ -1413,6 +1519,7 @@ CellClass* TechnoExt::TryStartSweepFire(WeaponTypeClass* pWeapon, int weaponInde
 	sweep.LineTarget = lineTarget;
 	sweep.AnchorCoord = anchor;
 	sweep.AnchorTargetID = pTarget->UniqueID;
+	sweep.Cooldown = cooldown;
 	sweep.ShotTimer.Start(shotInterval);
 	sweep.SweepTimer.Start(sweepFrames);
 
@@ -1627,7 +1734,7 @@ void TechnoExt::UpdateSweepFire()
 				}
 			}
 
-			cooldown = Math::max(cooldown, pWeaponExt->SweepFire_Cooldown.Get());
+			cooldown = Math::max(cooldown, sweep.Cooldown);
 
 			if (SweepFireDiag::Allowed())
 				Debug::Log("[SweepFire] %s: sweep ended after %d follow-up shot(s) (failed=%d)\n", pWeapon->ID, sweep.ShotsFired, failed ? 1 : 0);
@@ -1901,7 +2008,10 @@ int TechnoExt::GetSweepFireRearmTime(WeaponTypeClass* pWeapon)
 	// The engine writes this into RearmTimer, which is what makes the weapon look
 	// busy for the whole sweep and keeps the attack cursor and the AI honest
 	// (D-23). Berzerk's halving is discarded along with the vanilla value (D-29).
-	return pSweep->SweepTimer.TimeLeft + pWeaponExt->SweepFire_Cooldown.Get();
+	// The cooldown is the one this sweep stored when it started - already scaled by the
+	// weapon's ROF curve - so this timer and the internal cooldown that gates the next
+	// trigger are always the same number.
+	return pSweep->SweepTimer.TimeLeft + pSweep->Cooldown;
 }
 
 // =============================
@@ -1998,6 +2108,7 @@ bool SweepFireInstance::Serialize(T& stm)
 		.Process(this->ShotsFired)
 		.Process(this->LastDistance)
 		.Process(this->AnchorTargetID)
+		.Process(this->Cooldown)
 		.Success();
 }
 
@@ -2220,7 +2331,23 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 	record.Active = true;
 	record.TargetID = pTarget->UniqueID;
 	record.Duration = duration;
-	record.Interval = std::max(0, pWHExt->Temporal_Interval.Get());
+	// The gap between two freezes is paced the way the weapon's own reload is: the ROF curve
+	// scales it, so a curve that spins up tightens the gap and one that winds down widens it.
+	// Reading it here stores the value the freeze began with, which is what a save taken in the
+	// middle of the freeze will be resumed with - both need the same number.
+	record.Interval = this->ScaleByROFCurve(std::max(0, pWHExt->Temporal_Interval.Get()), pWeapon);
+
+	// The engine only ever shows this techno its ordinary reload between shots, and a freeze
+	// holds the target far beyond that: without telling the curve how long this cycle really
+	// lasts, every shot would look like the chain had stopped and the progress would be pinned
+	// at the start no matter what the curve says. The next shot is expected once the freeze and
+	// the interval are over - or at the reload, whichever the engine holds it to longer.
+	if (this->ROFCurveWeapon == pWeapon)
+	{
+		const int elapsed = Math::max(Unsorted::CurrentFrame - this->ROFCurveLastFrame, 0);
+		this->ROFCurveLastRearm = Math::max(this->ROFCurveLastRearm, elapsed + duration + record.Interval);
+	}
+
 	record.TickRof = std::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier));
 	record.Total = total;
 	record.Paid = 0;

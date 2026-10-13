@@ -49,6 +49,11 @@ struct SweepFireInstance
 	int ShotsFired { 0 }; // Follow-up shots fired so far, for diagnostics
 	double LastDistance { 0.0 }; // Distance along the line the last shot was fired at
 	DWORD AnchorTargetID { 0 }; // UniqueID of the target the line is attached to, 0 if none
+	// Frames this sweep waits before the next trigger may start another one, already scaled by
+	// the weapon's ROF curve at the moment the sweep began. Kept on the sweep so the engine's
+	// rearm timer and the internal cooldown that gates the next trigger can never disagree -
+	// including across a save taken while the sweep is still running.
+	int Cooldown { 0 };
 
 	bool Load(PhobosStreamReader& stm, bool registerForChange);
 	bool Save(PhobosStreamWriter& stm) const;
@@ -426,6 +431,21 @@ public:
 	// Keeps the infantry firing sequence looping for as long as a sweep runs
 	// (SweepFire.InfantryFireAnim). No effect on other technos.
 	void UpdateInfantrySweepAnim(int weaponIndex);
+
+	// --- ROF curve, shared primitives ---
+	// The curve itself, and the hook that applies it to an ordinary weapon's reload, live in
+	// Hooks.Firing.cpp. These two primitives are here as well because the features that own a
+	// different pace - SweepFire's cooldown between two sweeps, and the interval between two
+	// Temporal freezes - are paced from this file and read the same curve.
+	//
+	// Advances the spin-up state and returns the curve's ROF as a ratio to the weapon's own ROF
+	// (1.0 when there is no usable curve). Calling it twice on one frame is harmless: the second
+	// call sees a zero gap and changes nothing.
+	double StepROFCurve(WeaponTypeClass* pWeapon);
+	// Scales a frame count by the curve that this weapon has already put the techno on. A frame
+	// count that is not a delay (<= 0, i.e. the feature is off) and a weapon without a running
+	// chain are returned untouched.
+	int ScaleByROFCurve(int frames, WeaponTypeClass* pWeapon) const;
 
 	void InitializeLaserTrails();
 	void InitializeAttachEffects();

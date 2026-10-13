@@ -1017,12 +1017,11 @@ DEFINE_HOOK(0x6FF29E, TechnoClass_FireAt_ChargeTurret2, 0x6)
 
 // ROFCurve - weapon-level spin-up: the weapon fires faster the longer it keeps firing.
 //
-// The value that paces the next shot is RearmTimer.TimeLeft. In TechnoClass::FireWeapon the
-// engine stores it at 0x6FF2BB (`lea edx,[esi+0x2EC]` then `mov [edx+8],eax`), and the value
-// it stores is the EAX produced by the CalculateROF call at 0x6FF289. This hook sits at
-// 0x6FF29E - a point on every ROF-driven firing path, which is exactly where SweepFire's
-// composite reload replaces EAX for the same reason - and scales that EAX, so the engine
-// stores the curved delay.
+// The value that paces the next shot is RearmTimer.TimeLeft (+0x2F4). In TechnoClass::FireWeapon
+// the engine stores it at 0x6FF2BB (`lea edx,[esi+0x2EC]` then `mov [edx+8],eax`), and the value
+// it stores is the EAX produced by the CalculateROF call at 0x6FF289. The curve hooks sit on the
+// two `lea edx,[esi+0x2EC]` instructions - 0x6FF2AA (every weapon) and 0x6FE4B0 (the DiskLaser
+// side of the branch at 0x6FE468) - and rewrite EAX, so the engine stores the curved delay.
 //
 // Do NOT confuse the two stores: 0x6FE4A4 and 0x6FF29E both write [esi+0x2F8], which is
 // ChargeTurretDelay (turret animation only), not RearmTimer (TechnoClass.h:697-698;
@@ -1031,10 +1030,10 @@ DEFINE_HOOK(0x6FF29E, TechnoClass_FireAt_ChargeTurret2, 0x6)
 //
 // The curve is applied as a ratio against the weapon's own ROF, so every other modifier the
 // engine folded into EAX (AttachEffect ROF multiplier, veterancy, ROF.RandomDelay) stays
-// intact. This address already carries Phobos' TechnoClass_FireAt_ChargeTurret2 hook;
-// handlers on one address each see the original registers, and this one returns 0 and only
-// rewrites EAX for a weapon that asked for a curve. Berzerk's halving is dropped along with
-// the vanilla value, exactly as SweepFire documents (D-29).
+// intact. SweepFire sets EAX earlier on the same path (0x6FF29E) and its value is the one the
+// engine would store, so a sweeping weapon keeps it and only advances the curve here;
+// Berzerk's halving is dropped along with the vanilla value, exactly as SweepFire documents
+// (D-29).
 static void ApplyROFCurve(TechnoClass* pThis, WeaponTypeClass* pWeapon, int& rearmDelay)
 {
 	auto const pExt = TechnoExt::TryFetch(pThis);
@@ -1045,7 +1044,7 @@ static void ApplyROFCurve(TechnoClass* pThis, WeaponTypeClass* pWeapon, int& rea
 
 	// No curve, or a curve that cannot run: drop the state so a later weapon on the same unit
 	// starts from scratch, and leave the engine's value alone.
-	if (!pExtW->ROFCurve_IsUsable || pExtW->IsSweepFireEnabled())
+	if (!pExtW->ROFCurve_IsUsable)
 	{
 		pExt->ROFCurveWeapon = nullptr;
 		pExt->ROFCurveProgress = 0.0;
@@ -1060,48 +1059,25 @@ static void ApplyROFCurve(TechnoClass* pThis, WeaponTypeClass* pWeapon, int& rea
 	if (rearmDelay < 1)
 		return;
 
-	const int now = Unsorted::CurrentFrame;
-	const int baseRof = Math::max(pWeapon->ROF, 1);
+	// The curve itself (progress, decay, cycle and the ratio to the weapon's own ROF) lives in
+	// TechnoExt::StepROFCurve, because the features that pace a weapon over a longer cycle than
+	// the reload - SweepFire and the Temporal freeze - read the very same curve from there.
+	const double curveRatio = pExt->StepROFCurve(pWeapon);
 
-	// A burst is continuing when the same weapon fires again no later than a few frames after
-	// the interval it was last handed. The slack absorbs the frame the rearm timer needs to
-	// expire and ordinary scheduling jitter, and firing at a different target does not break
-	// the chain.
-	constexpr int ContinuitySlack = 3;
-	const bool continuing = pExt->ROFCurveWeapon == pWeapon
-		&& now - pExt->ROFCurveLastFrame <= pExt->ROFCurveLastRearm + ContinuitySlack;
+	// SweepFire owns this value: its rearm hook handed us a composite of the sweep's duration
+	// and its cooldown (TechnoExt::GetSweepFireRearmTime), and scaling that composite would
+	// stretch the sweep's own frame count as well. The cooldown inside it follows the curve on
+	// its own (TechnoExt::ScaleByROFCurve), so the composite is left exactly as the sweep
+	// computed it - but it is still recorded as the gap this chain expects, which is what makes
+	// the next sweep's first shot part of the same chain.
+	if (pExtW->IsSweepFireEnabled())
+	{
+		pExt->ROFCurveLastRearm = rearmDelay;
 
-	// The gap is how much time actually passed, so the spin-up follows real time when the
-	// engine holds a shot back and the decay follows real idle time when it fires at nothing.
-	const int gap = Math::max(now - pExt->ROFCurveLastFrame, 0);
-
-	if (continuing)
-	{
-		pExt->ROFCurveProgress += static_cast<double>(gap) / pExtW->ROFCurve_Ramp;
-	}
-	else if (pExtW->ROFCurve_Decay > 0)
-	{
-		pExt->ROFCurveProgress -= static_cast<double>(gap) / pExtW->ROFCurve_Decay;
-	}
-	else
-	{
-		pExt->ROFCurveProgress = 0.0;
+		return;
 	}
 
-	pExt->ROFCurveWeapon = pWeapon;
-	pExt->ROFCurveLastFrame = now;
-	pExt->ROFCurveProgress = std::clamp(pExt->ROFCurveProgress, 0.0, 1.0);
-
-	// Reaching the top either holds (Cycle=no) or starts the curve over (Cycle=yes).
-	if (pExtW->ROFCurve_Cycle && pExt->ROFCurveProgress >= 1.0)
-		pExt->ROFCurveProgress = 0.0;
-
-	const double ease = std::pow(pExt->ROFCurveProgress, pExtW->ROFCurve_Power);
-	const double curveRof = pExtW->ROFCurve_ResolvedStart
-		+ (pExtW->ROFCurve_End.Get() - pExtW->ROFCurve_ResolvedStart) * ease;
-
-	rearmDelay = Math::max(1, static_cast<int>(std::lround(
-		rearmDelay * curveRof / static_cast<double>(baseRof))));
+	rearmDelay = Math::max(1, static_cast<int>(std::lround(rearmDelay * curveRatio)));
 
 	pExt->ROFCurveLastRearm = rearmDelay;
 }

@@ -5194,15 +5194,18 @@ OmniFire.TurnToTarget=       ; boolean, default to [General] -> OmniFire.TurnToT
 
 ### ROF curve (weapon level spin-up)
 
-- A weapon can fire faster the longer it keeps firing. This is the vanilla gattling idea moved from the unit onto the weapon: it is the same weapon from the first shot to the last, nothing is swapped and no staged weapon list is involved, so every weapon type can carry its own curve.
+- A weapon can fire faster - or slower - the longer it keeps firing. This is the vanilla gattling idea moved from the unit onto the weapon: it is the same weapon from the first shot to the last, nothing is swapped and no staged weapon list is involved, so every weapon type can carry its own curve.
 - Only the delay between two shots changes. The projectile, the firing animation, the report, the warhead and the damage are untouched.
-- The curve runs from `ROFCurve.Start` (the slow end) to `ROFCurve.End` (the fast end) over `ROFCurve.Ramp` frames. `ROFCurve.Power` shapes how it gets there: `1.0` is a straight line, above `1.0` stays near the slow end and then accelerates, below `1.0` speeds up immediately.
+- The curve runs from `ROFCurve.Start` (progress `0`) to `ROFCurve.End` (progress `1`) over `ROFCurve.Ramp` frames. Neither end has to be the slow one: `Start` is what the weapon fires at when the chain begins and `End` what it reaches at the top of the curve, so a weapon may just as well fire fastest first and wind down. `ROFCurve.Power` shapes how it gets there: `1.0` is a straight line, above `1.0` stays near `Start` and then moves quickly, below `1.0` leaves `Start` immediately.
 - `ROFCurve.Decay` brings the curve back down once the weapon stops firing: after that many frames without a shot the progress has fallen back to the start. `ROFCurve.Decay=0` resets it at once.
-- `ROFCurve.Cycle` decides what reaching the fast end means: `no` holds the weapon at `End`, `yes` restarts the curve from `Start`.
+- `ROFCurve.Cycle` decides what reaching the top means: `no` holds the weapon at `End`, `yes` restarts the curve from `Start`.
 - The curve is applied as a ratio to the reload delay the engine had already computed, so everything else that shapes the firing rate - the `AttachEffect` ROF multiplier, veterancy and `ROF.RandomDelay` - keeps working. For the same reason a berzerk unit's own halving is applied on top of the curve rather than replacing it.
 - Only the interval between two reloads is affected, so on a `Burst` weapon this is the interval between bursts, not the delay inside a burst.
 - The progress is per weapon in progress and is not saved: loading a save starts the curve over, which is what it looks like anyway.
-- A weapon that uses `SweepFire` is left alone, because that feature owns the same reload value.
+- The same curve also paces the two cooldowns this branch added, because both are gaps between two attacks rather than anything inside one:
+  - `SweepFire.Cooldown` - the gap between two sweeps - is scaled by the curve. The sweep's own duration is not, because its frame count comes from the line's length and speed.
+  - `Temporal.Interval` - the gap between two freezes - is scaled the same way. That is also what makes the curve work at all on a weapon whose warhead sets `Temporal.Duration`: a freeze holds its target far longer than the reload does, which the curve would otherwise read as "not firing any more".
+  - Each of those cooldowns is only scaled when its key is not `0` - scaling is relative to `0`, so a cooldown of `0` stays `0`.
 
 In `rulesmd.ini`:
 ```ini
@@ -5218,9 +5221,10 @@ ROFCurve.Cycle=no            ; boolean
 
 ```{note}
 - `ROFCurve.End` has to be set; without it the weapon is treated as not having a curve and keeps its normal rate of fire.
-- `ROFCurve.Power` is clamped to `[0.1, 10.0]`, and a non-positive `Ramp` falls back to the default.
+- `ROFCurve.Power` is clamped to `[0.1, 10.0]`, and a non-positive `Ramp` falls back to the default; both corrections are reported as a developer warning.
 - A shot whose reload delay the engine computed as less than one frame is left alone rather than scaled.
-- With `ROFCurve.Cycle=yes` the curve restarts as soon as it reaches the fast end, so the weapon drops back to the slow rate for one shot.
+- With `ROFCurve.Cycle=yes` the curve restarts as soon as it reaches the top, so the weapon drops back to the other end for one shot.
+- A scaled cooldown is at least one frame, and it grows with the curve's value: a curve whose `End` is well above the weapon's own `ROF` can make a sweep or a freeze wait much longer than the value written in the INI.
 ```
 
 ### Range finding in cylinder
@@ -5341,7 +5345,7 @@ CanTargetVeterancy=all      ; List of Affected Veterancy Enumeration (none|rooki
   - `SweepFire.SourceCoord` and `SweepFire.TargetCoord` both default to `0,0`, which describes a line of zero length. A weapon in that state never starts a sweep and keeps firing ordinary single shots, so a weapon only has to be configured rather than opted out.
   - The first shot of a sweep is a completely ordinary shot. It goes through the normal firing pipeline, so animation, report, recoil, ammo, `ROF` and `Burst` accounting are all vanilla; only its aim point is moved to the start of the line. Every following shot is a real projectile with its own trajectory, warhead, damage and effects, and can therefore be intercepted individually.
   - `SweepFire.Speed` is the movement speed of the aim point, not the projectile's own `Speed`, and the length of the line is independent of the weapon's `Range`.
-  - `SweepFire.Cooldown` is the delay between the end of one sweep and the start of the next one.
+  - `SweepFire.Cooldown` is the delay between the end of one sweep and the start of the next one. A weapon that also enables `ROFCurve` scales this cooldown by its curve, so the wait between sweeps can tighten or stretch while the sweep itself keeps its length; see [ROF curve](#rof-curve-weapon-level-spin-up).
   - `SweepFire.MirrorCoord` mirrors the line along the lateral axis for the odd `Burst` shots, the same way `Trajectory.Engrave` alternates sides. A multi-barrel weapon therefore sweeps outwards from both muzzles.
   - `SweepFire.AimMode` decides what the follow-up shots aim at. `auto` (the default) and `coord` aim them at the exact point the aim point is on for that shot, so the whole series lands on a straight line. `cell` aims them at the centre of the cell containing that point, which quantizes the line into cell-sized steps; it is kept only as a fallback.
   - The engine aims the first shot at the cell containing the start of the line, because it computes the launch from a target object. The launch is then re-solved onto the exact point, so the first shot lands on the line like every later one.

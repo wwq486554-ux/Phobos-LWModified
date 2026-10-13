@@ -265,6 +265,23 @@ void WeaponTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->ROFCurve_Decay.Read(exINI, pSection, "ROFCurve.Decay");
 	this->ROFCurve_Cycle.Read(exINI, pSection, "ROFCurve.Cycle");
 
+	// The published range of the shape is [0.1, 10.0], and a ramp of zero or less would divide
+	// the progress by zero or walk it backwards. Correct both here, where the INI has just been
+	// read, instead of guarding every use.
+	if (this->ROFCurve_Ramp <= 0)
+	{
+		Debug::Log("[Developer warning][%s] ROFCurve.Ramp must be greater than 0; using the default 30 frames.\n", pSection);
+		this->ROFCurve_Ramp = 30;
+	}
+
+	const double curvePower = this->ROFCurve_Power.Get();
+
+	if (curvePower < 0.1 || curvePower > 10.0)
+	{
+		Debug::Log("[Developer warning][%s] ROFCurve.Power is clamped to [0.1, 10.0] (was %.4f).\n", pSection, curvePower);
+		this->ROFCurve_Power = Math::clamp(curvePower, 0.1, 10.0);
+	}
+
 	// Resolve the curve once, where the INI has just been read. The per-shot hook reads only
 	// the two resolved values, never the raw keys.
 	{

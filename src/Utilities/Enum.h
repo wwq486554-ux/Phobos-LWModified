@@ -512,6 +512,17 @@ enum class TemporalKilledByOthers : unsigned char
 	Erase = 1
 };
 
+// CellSpread.TemporalEraseMode - how an area Temporal warhead erases the units its CellSpread
+// covers. PerUnit is the vanilla reading: every victim has a warp and an erase timer of its own,
+// so they leave one after another, the weakest first. Pooled adds those lengths up instead - the
+// whole radius is held for the combined time and then erased together, on one frame. Both count
+// the target's health the way Temporal.UseCurrentHealth says.
+enum class TemporalEraseMode : unsigned char
+{
+	PerUnit = 0, // each victim on its own timer, in its own time
+	Pooled = 1   // one timer for the whole radius; every victim leaves on the same frame
+};
+
 // SuddenDeath.Mode - how a target hit by a SuddenDeath warhead leaves the game. A SuddenDeath
 // hit ignores every defence (armour, Verses, immunity, Iron Curtain, Force Shield, the shields
 // this fork adds) and always brings the target's health to exactly zero, so the only question

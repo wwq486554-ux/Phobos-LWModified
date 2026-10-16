@@ -531,17 +531,25 @@ void FootExt::UpdateTypeData(TechnoTypeClass* pCurrentType)
 			pTemporalImUsing = GameCreate<TemporalClass>(pThis);
 		}
 	}
-	else if (pTemporalImUsing)
+	else
 	{
-		if (pTemporalImUsing->Target)
+		if (pTemporalImUsing)
 		{
-			// Free this afflicted man.
-			pTemporalImUsing->LetGo();
+			if (pTemporalImUsing->Target)
+			{
+				// Free this afflicted man.
+				pTemporalImUsing->LetGo();
+			}
+
+			// Delete it
+			GameDelete(pTemporalImUsing);
+			pTemporalImUsing = nullptr;
 		}
 
-		// Delete it
-		GameDelete(pTemporalImUsing);
-		pTemporalImUsing = nullptr;
+		// A CellSpread Temporal freeze is delivered by instances of its own, which the engine
+		// never touches: a techno that no longer has a Temporal weapon must not keep holding
+		// anyone with them either. Idle ones go as well - nothing else will ever delete them.
+		TechnoExt::ReleaseExtraTemporalInstances(pThis, true);
 	}
 
 	if (hasAirstrike && pCurrentType->AirstrikeTeam > 0)

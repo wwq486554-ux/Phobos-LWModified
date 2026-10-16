@@ -259,6 +259,7 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Temporal_Duration.Read(exINI, pSection, "Temporal.Duration");
 	this->Temporal_DamageMode.Read(exINI, pSection, "Temporal.DamageMode");
 	this->Temporal_Interval.Read(exINI, pSection, "Temporal.Interval");
+	this->Temporal_UseCurrentHealth.Read(exINI, pSection, "Temporal.UseCurrentHealth");
 	this->Temporal_ZeroHealthAction.Read(exINI, pSection, "Temporal.ZeroHealthAction");
 	this->Temporal_KilledByOthers.Read(exINI, pSection, "Temporal.KilledByOthers");
 	this->SuddenDeath.Read(exINI, pSection, "SuddenDeath");
@@ -513,6 +514,7 @@ void WarheadTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->AffectsGround.Read(exINI, pSection, "AffectsGround");
 	this->AffectsAir.Read(exINI, pSection, "AffectsAir");
 	this->CellSpread_Cylinder.Read(exINI, pSection, "CellSpread.Cylinder");
+	this->CellSpread_TemporalEraseMode.Read(exINI, pSection, "CellSpread.TemporalEraseMode");
 	this->HealthCheck = this->AffectsAbovePercent > 0.0 || this->AffectsBelowPercent < 1.0;
 	this->VeterancyCheck = this->AffectsVeterancy != AffectedVeterancy::All;
 	this->AffectsInvokerOnly.Read(exINI, pSection, "AffectsInvokerOnly");
@@ -706,6 +708,7 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->Temporal_Duration)
 		.Process(this->Temporal_DamageMode)
 		.Process(this->Temporal_Interval)
+		.Process(this->Temporal_UseCurrentHealth)
 		.Process(this->Temporal_ZeroHealthAction)
 		.Process(this->Temporal_KilledByOthers)
 		.Process(this->SuddenDeath)
@@ -821,6 +824,7 @@ void WarheadTypeExt::Serialize(T& Stm)
 		.Process(this->AffectsGround)
 		.Process(this->AffectsAir)
 		.Process(this->CellSpread_Cylinder)
+		.Process(this->CellSpread_TemporalEraseMode)
 		.Process(this->HealthCheck)
 		.Process(this->VeterancyCheck)
 		.Process(this->AffectsInvokerOnly)

@@ -26,6 +26,19 @@ namespace TemporalTemp
 	extern bool PayingFreezeDamage;
 	// Set by that clamp when it fired, i.e. the payment would have killed the target.
 	extern bool FreezeDamageWasLethal;
+	// Set while a warp is handed from one instance to another without ending it: a CellSpread
+	// Temporal shot moves its caster's own slot onto one of its other victims when the instance
+	// holding the slot loses its victim. That is not the end of the freeze - the victim is
+	// neither settled nor started over - so the warp's record has to survive the move untouched.
+	extern bool MovingWarp;
+	// The frame a warp was removed on *by its own schedule* (TemporalClass::Update's erase path,
+	// entered from the AI hook), and which target that was. The warp is then let go of by the
+	// engine's erase tail, and that LetGo must not be mistaken for the caster breaking the freeze
+	// off: only a warp that was broken off releases the rest of its CellSpread shot. A frame stamp
+	// rather than a flag, so it can never be stale; the target is carried with it because one
+	// frame can see both an extra's own erase and a let-go of the caster's slot.
+	extern int ScheduledEraseFrame;
+	extern DWORD ScheduledEraseVictim;
 }
 class BulletClass;
 
@@ -78,8 +91,14 @@ struct TemporalFreezeInstance
 {
 	bool Active { false };
 	DWORD TargetID { 0 }; // UniqueID of the unit being held
-	int Duration { 0 }; // Frames the freeze lasts, from Temporal.Duration
+	int Duration { 0 }; // Frames the freeze lasts, from Temporal.Duration (0: no damage window)
 	int Interval { 0 }; // Frames the warp is held after that, from Temporal.Interval
+	int EraseAt { 0 }; // CellSpread.TemporalEraseMode=pooled: this many frames of freeze (0: off)
+	// The absolute frame the pooled erase lands on, so that every victim of the shot leaves on
+	// one frame no matter when its own update got round to advancing the freeze, and so that the
+	// caster's reload can be held to that exact frame (HoldTemporalRearm). 0 on a record that
+	// predates the field; the per-victim counter above is then used instead.
+	int EraseFrame { 0 };
 	int TickRof { 0 }; // Frames between two payments (weapon ROF, AE.ROFMultiplier applied)
 	int Total { 0 }; // Damage owed for a full Duration, warhead modifiers included
 	int Paid { 0 }; // Damage already dealt
@@ -269,8 +288,30 @@ public:
 	CDTimerClass SweepFireCooldownTimer;
 
 	// --- Temporal.Duration ---
-	// The "one-shot freeze" this techno is currently applying to someone, if any.
-	TemporalFreezeInstance TemporalFreeze;
+	// The "one-shot freezes" this techno is currently applying, one record per victim: a
+	// CellSpread Temporal warhead holds every unit in its radius at once, and each of those
+	// warps has its own duration and its own damage to pay. Keyed by TargetID.
+	std::vector<TemporalFreezeInstance> TemporalFreezes;
+
+	// --- CellSpread.TemporalEraseMode=pooled (written on the *caster*) ---
+	// The frame and length of the pooled erase the shot being delivered right now is scheduled
+	// for, and which victims it covers: the whole radius leaves together on frame
+	// TemporalAreaFrame + TemporalAreaEraseAt. Set by the delivery (Ext/Bullet/Hooks.DetonateLogics.cpp)
+	// just before it starts the warps and read back by BeginTemporalFreeze for each of them, so it
+	// is good for the frame it was written on and for those victims only - a warp that has nothing
+	// to do with the shot picks up nothing. Never serialized.
+	int TemporalAreaEraseAt;
+	int TemporalAreaFrame;
+	std::vector<DWORD> TemporalAreaVictims;
+
+	// --- the reload the freeze holds back (written on the *caster*) ---
+	// The frame the engine's own reload expires on, as it stood when the last area shot was
+	// delivered: the freeze hold only ever lengthens the timer, so this is what has to come back
+	// when the freeze is broken off (SyncTemporalRearm). Never serialized; a save taken mid-freeze
+	// simply resumes without it and the trim then falls back to the interval alone.
+	int TemporalRearmBaseFrame;
+	// The frame Temporal.Interval owes, kept here so that a trim cannot eat it.
+	int TemporalRearmIntervalFrame;
 
 	// --- Temporal.ZeroHealthAction / KilledByOthers (written on the *victim*) ---
 	// The victim's health was used up while a Linger freeze held it: it sits at 1 HP and has
@@ -282,12 +323,20 @@ public:
 	bool TemporalErasePending;
 
 	// Registers the freeze a Temporal detonation just started. Called from the tail of
-	// TemporalClass::Fire; does nothing unless the warhead sets Temporal.Duration.
+	// TemporalClass::Fire; does nothing unless the warhead sets Temporal.Duration or the shot is
+	// a pooled CellSpread one.
 	void BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget);
+	// The record write on its own, without a Temporal instance to read the target off. The
+	// delivery calls it directly for a victim this techno is *already* warping, because a shot
+	// that covers such a victim again must re-time it rather than warp it a second time: a second
+	// warp is chained onto the first as a helper, and the holder's per-frame erase step then grows
+	// by the helper's (0x71AB10), draining that victim twice as fast as the rest.
+	void BeginTemporalFreezeFor(TechnoClass* pTarget);
 	// Ends this techno's freeze on pTemporal's target (the warp let go, or the duration ran
 	// out): pays the damage still owed for the time the target was actually frozen and
-	// clears the record.
-	void EndTemporalFreeze(TemporalClass* pTemporal);
+	// clears the record. Returns whether there *was* a record to settle - the callers use that
+	// to tell a warp broken off from one that ended on its own schedule.
+	bool EndTemporalFreeze(TemporalClass* pTemporal);
 	// Advances the freeze by one frame. Returns whether the engine should still erase the
 	// target, keep it warped, or whether this techno has nothing to say about it.
 	TemporalFreezeFrame UpdateTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget);
@@ -297,6 +346,58 @@ public:
 	// The weapon whose Temporal warhead is holding this techno's current warp: the one that
 	// actually delivered it when that is known, otherwise the engine's own selection.
 	static WeaponTypeClass* GetTemporalWarpWeapon(TechnoClass* pOwner);
+	// Releases every TemporalClass this techno owns apart from TemporalImUsing. A CellSpread
+	// Temporal freeze is delivered by one instance per victim, and the engine only ever lets go
+	// of TemporalImUsing - the rest have to be released by hand when the caster stops being able
+	// to hold them (it is destroyed, or converted into a techno without a Temporal weapon).
+	// includeIdle also drops the instances that hold nobody at the moment. They must be left
+	// alone when this runs from inside a TemporalClass::Fire that is still setting one up (see
+	// ReleaseExtraTemporalInstances), but a caster that is going away has to take them along:
+	// an idle instance still points at its Owner, and TemporalClass::Update dereferences that as
+	// soon as it is called on one.
+	static void ReleaseExtraTemporalInstances(TechnoClass* pOwner, bool includeIdle = false);
+
+	// Pushes this techno's reload (TechnoClass RearmTimer, +0x2EC - the timer the engine's own
+	// firing paths consult, and the one Temporal.Interval and SweepFire already use) out to at
+	// least this many frames. A CellSpread Temporal shot calls it with the length of its own
+	// freeze, so the caster physically cannot fire again until the units that shot covered are
+	// gone. Only ever extended; a longer vanilla reload is left alone.
+	static void ExtendTemporalRearm(TechnoClass* pOwner, int frames);
+
+	// Keeps this techno's reload pushed out to the frame its last pending pooled freeze leaves on.
+	// Called every frame while such a freeze runs (from TemporalClass::Update, where every victim
+	// of the shot passes through): the timer has other writers - the engine restarts it on every
+	// shot and this fork's own features scale or stop it - and a shot that escapes while the
+	// previous one's victims are still held cannot schedule them at all, so they then fall back to
+	// the engine's per-victim erase counter and leave one by one.
+	// Only ever extends, and stops by itself once the frame is past.
+	void HoldTemporalRearm();
+
+	// Recomputes this techno's reload from everything it still owes and writes it, force included -
+	// unlike ExtendTemporalRearm this one may also move the timer *down*:
+	//
+	//   * the freeze hold of its pending pooled records (the only part that can be given up),
+	//   * Temporal.Interval, as pushed when a freeze ended,
+	//   * the reload the engine itself started when the shot was fired, captured at delivery
+	//     (TemporalRearmBaseFrame), so a trim can never cut into the weapon's own ROF.
+	//
+	// A caster whose freeze is broken off mid-way owes none of the freeze hold any more, and
+	// without this the timer would sit at the remaining erase time and lock the weapon out for it
+	// (the reported "after stopping the attack it still waits out the erase time plus ROF").
+	void SyncTemporalRearm();
+
+	// The health a Temporal warp's length is measured against: the target's type Strength, which
+	// is what vanilla uses, or its current health when the warhead sets Temporal.UseCurrentHealth.
+	static int GetFreezeHealth(TechnoClass* pVictim, WarheadTypeClass* pWarhead);
+	// How many frames vanilla itself would take to erase this victim with this caster's warp -
+	// the health above times ten, at the warp's per-frame step. 0 when it cannot be worked out.
+	static int GetTemporalEraseFrames(TechnoClass* pOwner, TechnoClass* pVictim, WarheadTypeClass* pWarhead);
+
+	// Whether this techno holds a pooled record for that victim whose frame has come, i.e. the
+	// victim's own update is about to erase it. The caller uses it to keep such a victim where it
+	// is: moving it onto the caster's slot first would skip that update (it lands a frame late),
+	// and if the slot refuses the unit it is left loose instead of being erased.
+	bool IsPooledEraseDue(TechnoClass* pVictim);
 
 	TechnoExt(TechnoClass* OwnerObject) : RadioExt(OwnerObject)
 		, TypeExtData { nullptr }
@@ -357,7 +458,12 @@ public:
 		, PreventCrewEscape { false }
 		, Sweeps {}
 		, SweepFireCooldownTimer {}
-		, TemporalFreeze {}
+		, TemporalFreezes {}
+		, TemporalAreaEraseAt { 0 }
+		, TemporalAreaFrame { 0 }
+		, TemporalAreaVictims {}
+		, TemporalRearmBaseFrame { 0 }
+		, TemporalRearmIntervalFrame { 0 }
 		, TemporalLingerSaved { false }
 		, TemporalErasePending { false }
 		, ROFCurveWeapon { nullptr }

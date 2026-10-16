@@ -86,6 +86,13 @@ public:
 	// freeze before they pass. 0 - the default - adds nothing.
 	Valueable<int> Temporal_Interval;
 
+	// Whether this warp's length is measured against the target's current health (yes) or its
+	// type's full Strength (no, the default). Vanilla always uses the type's Strength - a warp
+	// counter is the target's Strength times ten no matter how hurt it is - so a wounded unit
+	// takes exactly as long as a fresh one. Turning this on makes the counter follow the health
+	// the unit actually has, and the pooled CellSpread erase below measure the same way.
+	Valueable<bool> Temporal_UseCurrentHealth;
+
 	// What happens while the target's health is used up during the freeze, and how a lethal hit
 	// from someone else resolves. Erase/Normal (the defaults) keep the behaviour of a freeze
 	// that erases the target the moment the damage lands, and lets outsiders kill it the
@@ -292,6 +299,7 @@ public:
 	Valueable<bool> AffectsGround;
 	Valueable<bool> AffectsAir;
 	Valueable<bool> CellSpread_Cylinder;
+	Valueable<TemporalEraseMode> CellSpread_TemporalEraseMode;
 	Valueable<bool> AffectsInvokerOnly;
 	Valueable<bool> AffectsInvokerOnly_Reverse;
 	Nullable<bool> AffectsInvokerOnly_IgnoreInvokerState;
@@ -403,6 +411,7 @@ public:
 		, Temporal_Duration { 0 }
 		, Temporal_DamageMode { TemporalDamageMode::Continuous }
 		, Temporal_Interval { 0 }
+		, Temporal_UseCurrentHealth { false }
 		, Temporal_ZeroHealthAction { TemporalZeroHealthAction::Erase }
 		, Temporal_KilledByOthers { TemporalKilledByOthers::Normal }
 
@@ -587,6 +596,7 @@ public:
 		, AffectsGround { true }
 		, AffectsAir { true }
 		, CellSpread_Cylinder { false }
+		, CellSpread_TemporalEraseMode { TemporalEraseMode::PerUnit }
 		, AffectsInvokerOnly { false }
 		, AffectsInvokerOnly_Reverse { false }
 		, AffectsInvokerOnly_IgnoreInvokerState {}

@@ -985,6 +985,373 @@ DEFINE_HOOK(0x4899DA, MapClass_DamageArea_DamageUnderGround, 0x7)
 
 #pragma endregion
 
+#pragma region TemporalCellSpread
+
+// A Temporal warhead normally warps exactly one unit. The engine's single call to
+// TemporalClass::Fire (0x71AF20) is handed the bullet's target and the warhead's
+// CellSpread is never reached, because this branch leaves for the end of the function
+// before the area damage runs. CellSpread on such a warhead therefore did nothing at
+// all; here every unit inside it is warped.
+//
+// The engine's own call is left where it is and still warps the unit the engine picked
+// (the bullet's target, or the transport an infantry inside it stands for). That keeps
+// every caster-side mechanism the engine has working for that unit untouched: it
+// refuses to fire again at the unit the caster is warping, it releases the warp when the
+// caster stops attacking, retargets, dies or is limboed, and it hands the victim over to
+// the next caster in the chain. Only the *rest* of the radius is delivered from here,
+// one TemporalClass per victim - the same sourceless delivery the AnySlot fix below
+// introduced. Each victim's own AI drives its own instance, so one caster holds several
+// units at once, and a victim another caster is already warping gets chained by Fire
+// exactly the way vanilla chains two casters (a relay: the next instance takes the
+// victim over once the current one lets go).
+//
+// One case has no unit for the engine to hand to Fire - a bullet aimed at a cell or at
+// terrain, or one that lost its target. Vanilla calls Fire with a null target and warps
+// nobody there, so this side does the whole delivery and afterwards promotes one victim
+// into the caster's TemporalImUsing slot (see DeliverAll), which is the slot every
+// engine release path is wired to.
+//
+// Who gets hit is decided by the warhead itself - WarheadTypeExt::CanTargetHouse is
+// exactly AffectsOwner / AffectsAllies / AffectsEnemies / AffectsNeutral, the same
+// filter the warhead's other per-target effects go through.
+//
+// CellSpread = 0 leaves everything to vanilla: both hooks below fall through untouched.
+
+namespace TemporalCellSpread
+{
+	bool Applies(BulletClass* pBullet, TechnoClass* pOwner)
+	{
+		if (!pBullet || !pOwner)
+			return false;
+
+		const auto pWH = pBullet->WH;
+
+		return pWH && pWH->Temporal && pWH->CellSpread > 0.0f;
+	}
+
+	// Whether the shot has to warp this victim itself. A unit that is already being warped - by
+	// this caster or by another one - is left alone: TemporalClass::Fire does not take such a unit
+	// over, it chains the new instance onto the warp that holds it as a helper, and the holder's
+	// per-frame erase step then grows by the helper's (0x71AB10). That helper is a live pointer to
+	// a unit whose warp belongs to somebody else, and the chain that erases the unit does not clear
+	// a helper's target - letting go of one later dereferences a dead unit through whatever the
+	// freed memory now holds (the wild jump that crashed 2026-10-15 22:07: LetGo's
+	// `call [target_vt+0x2c]` at 0x71AC22 jumping into gamemd's data). Not warping a unit twice also
+	// keeps it from being drained twice as fast as the rest of the radius.
+	bool ShallDeliver(TechnoClass* pVictim)
+	{
+		return pVictim && !pVictim->TemporalTargetingMe;
+	}
+
+	// Warps one victim with an instance of its own. Fire bails out without touching the
+	// instance when the engine's own gate (TemporalClass::CanWarpTarget: an iron curtain, an
+	// occupied building, ...) refuses the target, so an instance it left empty is deleted
+	// again instead of being kept registered and warping nobody.
+	void Fire(TechnoClass* pOwner, TechnoClass* pTarget)
+	{
+		auto const pInstance = GameCreate<TemporalClass>(pOwner);
+		pInstance->Fire(pTarget);
+
+		if (!pInstance->Target)
+			GameDelete(pInstance);
+	}
+
+	// Every unit in the warhead's radius that the warhead's own filter accepts.
+	std::vector<TechnoClass*> GetVictims(BulletClass* pBullet, TechnoClass* pOwner)
+	{
+		const auto pWH = pBullet->WH;
+		const auto pWHExt = WarheadTypeExt::Fetch(pWH);
+		const auto pHouse = pOwner->Owner;
+		std::vector<TechnoClass*> victims;
+
+		for (auto const pTarget : Helpers::Alex::getCellSpreadItemsExt(
+			pBullet->GetCoords(), pWH->CellSpread, true, pWHExt->CellSpread_Cylinder))
+		{
+			if (!pTarget || !pTarget->IsAlive || pTarget->InLimbo || pTarget->IsSinking)
+				continue;
+
+			if (!pWHExt->CanTargetHouse(pHouse, pTarget))
+				continue;
+
+			victims.push_back(pTarget);
+		}
+
+		return victims;
+	}
+
+	// Works out how long this shot's freeze lasts and what has to happen on the way, once, from the
+	// victims the shot will hold itself. Two things come out of it:
+	//
+	//   * the caster's reload is pushed out to cover the whole freeze. That is what keeps it from
+	//     firing again while the units this shot covered are still frozen: the engine's own "this
+	//     techno is holding a warp" gate (0x741206) also wants TechnoClass +0x5A4 to be set, which
+	//     is a locomotion-side field, so which units it actually holds back depends on the class -
+	//     the reload timer is consulted by every class' firing path instead. It is the same timer
+	//     Temporal.Interval and SweepFire use, and only ever extended.
+	//   * with CellSpread.TemporalEraseMode=pooled, the combined erase time is left on the caster
+	//     for the per-victim warps to pick up as they are created (TechnoExt::TemporalAreaEraseAt),
+	//     so that they all leave together on that frame.
+	//
+	// A victim another caster is already warping is only chained onto that warp by the engine's own
+	// relay, so its erasure is not this shot's to schedule and it is neither counted nor named in
+	// the plan. A victim *this* caster is already warping is a different case: it is counted and
+	// named like any other, and because there is no Fire of its own to pick the plan up, its
+	// record is re-timed here instead (BeginTemporalFreezeFor). Skipping those victims was the bug
+	// behind both halves of the "it fires again while someone is still frozen, and that someone
+	// disappears before the others" report: they ended up with no schedule at all and fell back to
+	// the engine's per-victim erase counter.
+	//
+	// Later arrivals are not counted: the victim list is the snapshot the detonation produced.
+	//
+	// The pooled total is only good for the frame it was worked out on - the shot's warps are all
+	// created on that frame, the engine's own hit on the direct target included - and only for the
+	// victims it counted, both of which are stamped on with it. A delivery that is not pooled
+	// clears them.
+	void ScheduleShot(BulletClass* pBullet, TechnoClass* pOwner, TechnoClass* pDirect,
+		std::vector<TechnoClass*> const& victims)
+	{
+		const auto pExt = TechnoExt::TryFetch(pOwner);
+
+		if (!pExt)
+			return;
+
+		pExt->TemporalAreaEraseAt = 0;
+		pExt->TemporalAreaFrame = Unsorted::CurrentFrame;
+		pExt->TemporalAreaVictims.clear();
+
+		const auto pWH = pBullet->WH;
+
+		if (!pWH)
+			return;
+
+		const auto pWHExt = WarheadTypeExt::Fetch(pWH);
+		const bool pooled = pWHExt->CellSpread_TemporalEraseMode == TemporalEraseMode::Pooled;
+		long long total = 0;
+		int longest = 0;
+		// How long the radius stays occupied by units this shot must not touch (already being
+		// warped, by this caster or another one). The caster's reload is held back for at least
+		// that long: firing again into a radius that still holds those units is what used to
+		// leave the other caster's chain hung with helpers from this one.
+		int alreadyWarped = 0;
+		std::vector<TechnoClass*> reTimed;
+
+		auto const weigh = [&](TechnoClass* pVictim)
+			{
+				if (!pVictim)
+					return;
+
+				int victimFrames = TechnoExt::GetTemporalEraseFrames(pOwner, pVictim, pWH);
+
+				// A unit this shot is about to warp must never be left out of the plan because its
+				// own estimate came out as nothing: GetTemporalEraseFrames goes to zero whenever the
+				// warp's per-frame step truncates away, and that step is divided by a *per unit*
+				// armour multiplier (AE multiplier x house x type x VeteranArmor). A unit whose step
+				// comes out zero then had no recording at all and fell back to the engine's own
+				// counter, so it left the radius on its own while the rest waited out the pool - a
+				// thin unit erased first, a thick one still frozen afterwards. One frame stands in
+				// for "counted, and scheduled with the rest of the shot".
+				if (victimFrames <= 0)
+					victimFrames = 1;
+
+				if (const auto pHolder = pVictim->TemporalTargetingMe)
+				{
+					// Already warped, so this shot does not warp it (see ShallDeliver). The erasure
+					// is not this shot's to schedule either - but the radius is not clear while the
+					// unit is still standing in it.
+					if (victimFrames > alreadyWarped)
+						alreadyWarped = victimFrames;
+
+					// A unit of this caster's own is the shot's business all the same: it leaves
+					// with the shot, so its record is re-timed to it below (it gets no Fire of its
+					// own to pick the plan up from).
+					if (pHolder->Owner != pOwner)
+						return;
+
+					reTimed.push_back(pVictim);
+				}
+
+				total += victimFrames;
+
+				if (victimFrames > longest)
+					longest = victimFrames;
+
+				// Only pooled mode reads the plan back, and only the victims it names pick it up.
+				if (pooled)
+					pExt->TemporalAreaVictims.push_back(pVictim->UniqueID);
+			};
+
+		if (pDirect)
+			weigh(pDirect);
+
+		for (auto const pVictim : victims)
+		{
+			if (pVictim != pDirect)
+				weigh(pVictim);
+		}
+
+		// How long the shot's freeze lasts: pooled holds the radius for the combined time, while
+		// per-unit victims go one after another, so the last one leaves after the longest of them.
+		// A Temporal.Duration freeze hands every victim back on its own frame together, so the
+		// window is what the shot lasts then - unless pooled cuts it short, which it does by
+		// erasing every victim on its own frame.
+		int shotFrames = 0;
+
+		if (pooled)
+		{
+			shotFrames = static_cast<int>(total);
+		}
+		else if (pWHExt->Temporal_Duration > 0)
+		{
+			shotFrames = pWHExt->Temporal_Duration;
+		}
+		else
+		{
+			shotFrames = longest;
+		}
+
+		// Never nothing, or the caster goes straight back to firing on its ROF while the units
+		// this shot covered are still frozen - and the shot that follows then finds every one of
+		// them already warped and cannot schedule any of them.
+		if (shotFrames <= 0)
+			shotFrames = longest;
+
+		// A radius that still holds units another caster is warping is not clear either: the shot
+		// waits for the longer of the two rather than firing into it again. Without this, a radius
+		// taken over entirely by one caster left every other caster firing on its ROF (42 probe
+		// lines, 27 of them with nothing to schedule).
+		if (alreadyWarped > shotFrames)
+			shotFrames = alreadyWarped;
+
+		// One frame past the freeze. The victims are erased on the frame the counter runs out, and
+		// the caster's own AI runs before theirs, so without the extra frame it fires on that very
+		// frame with the previous shot's units still on the field.
+		//
+		// What the engine itself still owed when this shot landed is captured first: the hold below
+		// only ever lengthens the timer, and a freeze broken off mid-way (the player stops the
+		// attack) must give back the freeze's part of it and not the weapon's own reload.
+		pExt->TemporalRearmBaseFrame = Unsorted::CurrentFrame + Math::max(pOwner->RearmTimer.GetTimeLeft(), 0);
+		TechnoExt::ExtendTemporalRearm(pOwner, shotFrames > 0 ? shotFrames + 1 : 0);
+
+		if (pooled && total > 0)
+		{
+			pExt->TemporalAreaEraseAt = static_cast<int>(total);
+
+			for (auto const pVictim : reTimed)
+				pExt->BeginTemporalFreezeFor(pVictim);
+		}
+	}
+
+	// Direct hit: the engine's own call picks pDirect up right after this hook returns, so
+	// only the rest of the radius is delivered from here. The extras have to be fired before
+	// that call - a Fire lets go of whatever the caster's slot holds, so an extra fired after
+	// the engine's own would drop the direct target again.
+	void DeliverExtras(BulletClass* pBullet, TechnoClass* pOwner, TechnoClass* pDirect)
+	{
+		const auto victims = GetVictims(pBullet, pOwner);
+		ScheduleShot(pBullet, pOwner, pDirect, victims);
+
+		for (auto const pTarget : victims)
+		{
+			if (pTarget != pDirect && ShallDeliver(pTarget))
+				Fire(pOwner, pTarget);
+		}
+	}
+
+	// The engine has no unit to hand to Fire (see the region comment). Every victim is held by
+	// an instance of its own and one of them is promoted into the caster's TemporalImUsing slot,
+	// because that slot is what the engine's own release paths act on, and letting go of it is
+	// what releases the rest of the shot (see the LetGo hooks in Ext/Techno/Hooks.cpp).
+	//
+	// Which victim that is decides when the shot's attack is over: the engine refuses to fire
+	// while the slot holds a warp, so the attack lasts exactly as long as the victim in it. If
+	// the one promoted were simply the first the enumeration returns, the attack would end the
+	// moment *that* victim is erased - and the caster would immediately fire a second shot at the
+	// same ground while the rest of the radius is still frozen, stacking a second set of warps on
+	// them. So the victim that outlives the others is the one promoted.
+	//
+	// Outliving the others is what the engine's own counter measures: TemporalClass::Fire sets
+	// WarpRemaining to the victim's *type* Strength times ten (0x71AFA1-0x71AFB9), and every
+	// victim of one shot loses the same per-frame step, because that step is read from the
+	// caster's weapon rather than from the victim (0x71A876-0x71A888). The largest health is
+	// therefore erased last - and Temporal.UseCurrentHealth decides whether that is the type's
+	// Strength or the health the unit actually has. (A Temporal.Duration freeze ends every victim
+	// on its own frame together, so the choice does not matter there.)
+	//
+	// The promotion is the last Fire of the shot on purpose: every TemporalClass::Fire lets go
+	// of whatever the caster's slot holds before it takes its own target, so an instance fired
+	// after the promoted one would drop the promoted victim again.
+	//
+	// Returns false when the warhead covers no eligible unit at all, which lets the caller leave
+	// the engine's own path alone.
+	//
+	// promote is off when the engine has a unit to warp of its own: that unit (or whatever the
+	// caster's slot already holds) is the shot's anchor then, and moving the slot onto one of these
+	// victims would let go of it first.
+	bool DeliverAll(BulletClass* pBullet, TechnoClass* pOwner, bool promote)
+	{
+		const auto victims = GetVictims(pBullet, pOwner);
+
+		if (victims.empty())
+			return false;
+
+		ScheduleShot(pBullet, pOwner, nullptr, victims);
+
+		// The victim that outlives the others - only one this shot may actually hold, so never a
+		// unit another warp is already holding.
+		TechnoClass* pPromoted = nullptr;
+
+		if (promote)
+		{
+			for (auto const pVictim : victims)
+			{
+				if (!ShallDeliver(pVictim))
+					continue;
+
+				if (!pPromoted || TechnoExt::GetFreezeHealth(pVictim, pBullet->WH) > TechnoExt::GetFreezeHealth(pPromoted, pBullet->WH))
+					pPromoted = pVictim;
+			}
+		}
+
+		for (auto const pVictim : victims)
+		{
+			if (pVictim != pPromoted && ShallDeliver(pVictim))
+				Fire(pOwner, pVictim);
+		}
+
+		// A caster without a Temporal instance of its own (TemporalWeapon.AnySlot off and the
+		// warhead came from a weapon that never entered the type's slots) has nothing to promote
+		// into; the whole radius then stays on instances of its own.
+		if (pPromoted)
+		{
+			if (const auto pSlot = pOwner->TemporalImUsing)
+				pSlot->Fire(pPromoted);
+		}
+
+		return true;
+	}
+}
+
+// The same warhead detonating with nothing under it at all: the bullet has no target, so
+// vanilla leaves for the end of the function one branch earlier and warps nobody. The units
+// the warhead covers are still named by its CellSpread, so they are delivered here. The return
+// address is spelled out instead of re-running the stolen branch, which keeps this independent
+// of the flags.
+DEFINE_HOOK(0x469447, BulletClass_Detonate_TemporalCellSpread_NoTarget, 0x6)
+{
+	enum { NoTarget = 0x469AA4, HasTarget = 0x46944D };
+
+	GET(BulletClass*, pThis, ESI);
+
+	if (pThis->Target || !TemporalCellSpread::Applies(pThis, pThis->Owner))
+		return pThis->Target ? HasTarget : NoTarget;
+
+	TemporalCellSpread::DeliverAll(pThis, pThis->Owner, true);
+
+	return NoTarget;
+}
+
+#pragma endregion
+
 #pragma region TemporalFromAnyWeaponSlot
 
 // Vanilla creates a techno's Temporal instance (TemporalImUsing, +0x274) in
@@ -1001,10 +1368,16 @@ DEFINE_HOOK(0x4899DA, MapClass_DamageArea_DamageUnderGround, 0x7)
 //
 // The stolen instruction (mov ecx,[ecx+0x274]) re-runs with ECX still holding the
 // owner, so the call that follows it picks up the instance created here.
+//
+// EDI already holds the argument for that call (it was pushed at 0x4694BA), which is the
+// target the engine is about to warp, or null when the bullet is aimed at a cell or at
+// terrain and the engine has no unit to warp at all. A CellSpread Temporal warhead is
+// delivered off that distinction; see the TemporalCellSpread region above.
 DEFINE_HOOK(0x4694BB, BulletClass_Detonate_EnsureTemporal, 0x6)
 {
 	GET(BulletClass*, pThis, ESI);
 	GET(TechnoClass*, pOwner, ECX);
+	GET(TechnoClass*, pDirect, EDI);
 
 	if (RulesExt::Global()->TemporalWeapon_AnySlot && pOwner)
 	{
@@ -1022,7 +1395,43 @@ DEFINE_HOOK(0x4694BB, BulletClass_Detonate_EnsureTemporal, 0x6)
 			pOwner->TemporalImUsing = GameCreate<TemporalClass>(pOwner);
 	}
 
-	return 0;
+	if (!TemporalCellSpread::Applies(pThis, pOwner))
+		return 0;
+
+	// The engine is about to warp pDirect itself, so only the rest of the radius is delivered from
+	// here and its call is left alone - but only while pDirect is free to be warped. Firing the
+	// caster's slot at a unit that is already being warped does not take it over: it chains a
+	// second instance onto that warp as a helper (and, when the warp is this caster's own, lets go
+	// of it first). Either way it is a warp this shot has no business restructuring, so the whole
+	// radius is delivered here and the engine's call skipped instead.
+	if (pDirect && !pDirect->TemporalTargetingMe)
+	{
+		TemporalCellSpread::DeliverExtras(pThis, pOwner, pDirect);
+
+		return 0;
+	}
+
+	// Either nothing for the engine to warp, or a unit that must not be warped again. In both cases
+	// its own call is skipped: with no target it would let go of whatever the caster's slot holds
+	// and then warp nobody, and with an already-warped target it would chain onto that warp.
+	// Skipping it means the argument pushed at 0x4694BA is never popped (Fire is __thiscall
+	// and pops it itself), hence the stack pointer adjustment - SyringeEx's ESPModification
+	// feature, which this Phobos refuses to run without (see Phobos::ExeRun).
+	//
+	// The slot is only promoted when the engine had no unit of its own to warp: otherwise the warp
+	// that is already running is the shot's anchor.
+	if (pDirect == nullptr)
+	{
+		if (!TemporalCellSpread::DeliverAll(pThis, pOwner, true))
+			return 0;
+	}
+	else
+	{
+		TemporalCellSpread::DeliverAll(pThis, pOwner, false);
+	}
+
+	R->ESP(R->ESP() + 4);
+	return 0x4694C6;
 }
 
 #pragma endregion

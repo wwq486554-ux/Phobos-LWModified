@@ -112,10 +112,73 @@ DEFINE_HOOK(0x736480, UnitClass_AI, 0x6)
 	return 0;
 }
 
+// The [LWTS] / [LWTL] / [LWTSE] / [LWTSR] / [LWTM] / [LWTA] probes that followed the pooled
+// CellSpread erase through its test rounds were removed once the feature passed in game
+// (2026-10-16). They only ever logged; put them back the same way if this path ever has to be
+// instrumented again.
+
 // Ares-hook jmp to this offset
 DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 {
 	GET(TemporalClass*, pThis, ESI);
+
+	// Every unit a pooled CellSpread shot covers passes through here once a frame, so this is where
+	// the caster's reload is held to the frame that shot's victims were scheduled to leave on. One
+	// push at delivery time was not enough: a shot that goes out while the previous one's victims
+	// are still held finds every unit in the radius already warped, cannot schedule any of them,
+	// and they then leave one by one on the engine's own per-victim counter. Only pooled records
+	// hold the reload, only ever for longer, and the hold stops by itself once their frame is past.
+	if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
+		pOwnerExt->HoldTemporalRearm();
+
+	// A CellSpread Temporal shot's victims besides the one the engine warps are held by instances
+	// of the caster's own (see Ext/Bullet/Hooks.DetonateLogics.cpp), and the engine's erase of a
+	// victim clears its instance's target in place without a LetGo (0x71AAEA), so the shot can end
+	// up with its anchor gone while the rest of the radius is still held. That is exactly when the
+	// caster fires again - the engine refuses to fire while the caster's own Temporal instance
+	// holds a warp - and the new shot would chain a second instance onto every victim still held,
+	// doubling the per-frame erase rate on them (and, with Temporal.Duration, paying each freeze
+	// out a second time).
+	//
+	// Handing the caster's slot over to this victim keeps the shot's attack alive until the last
+	// unit the shot covered is gone. A unit that enters the radius after the shot is not part of
+	// it: only instances the caster already owns are handed over, and those are exactly that
+	// shot's remaining victims.
+	// A warp the caster's own slot hands over must still be the one this instance is holding: an
+	// instance can end up with a target that another warp took over (or that is gone entirely -
+	// the chain that erases it does not clear a helper's target), and LetGo on such an instance
+	// dereferences a pointer it does not own.
+	if (const auto pCaster = pThis->Owner;
+		pCaster && pThis->Target && pThis->WarpRemaining > 0 && pThis != pCaster->TemporalImUsing
+		&& pThis->Target->TemporalTargetingMe == pThis)
+	{
+		if (const auto pSlot = pCaster->TemporalImUsing; pSlot && !pSlot->Target)
+		{
+			const auto pVictim = pThis->Target;
+			const int warpRemaining = pThis->WarpRemaining;
+			const auto pCasterExt = TechnoExt::TryFetch(pCaster);
+
+			// A victim whose pooled erase frame has come is left where it is: its own update would
+			// erase it on this very frame, and moving it onto the slot first skips that - it then
+			// leaves a frame late, or, when the slot refuses it (TemporalClass::CanWarpTarget), not
+			// at all: the unit is let go instead of erased. The slot only needs filling while the
+			// shot still has victims to hold (see HoldTemporalRearm for the reload side).
+			if (!pCasterExt || !pCasterExt->IsPooledEraseDue(pVictim))
+			{
+				// Let go of the victim and let the slot's own instance take it over; firing a second
+				// instance at it would chain the two together instead, which is the doubling this is
+				// here to avoid. The warp is not ending, only changing instance, so the freeze record
+				// has to survive the move (TemporalTemp::MovingWarp) and the counter is carried over so
+				// the victim is still erased on the frame it always would have been. This instance is
+				// left without a target; it is deleted when the caster is torn down.
+				TemporalTemp::MovingWarp = true;
+				pThis->LetGo();
+				pSlot->Fire(pVictim);
+				TemporalTemp::MovingWarp = false;
+				pSlot->WarpRemaining = warpRemaining;
+			}
+		}
+	}
 
 	if (const auto pTarget = pThis->Target)
 	{
@@ -144,6 +207,11 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 			if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
 				pOwnerExt->AbandonTemporalFreeze(pTarget);
 
+			// This erase is the warp's own end, not the caster breaking it off: the engine lets go
+			// of the slot inside the erase path, and that must not release the rest of the shot.
+			TemporalTemp::ScheduledEraseFrame = Unsorted::CurrentFrame;
+			TemporalTemp::ScheduledEraseVictim = pTarget->UniqueID;
+
 			return 0x71A895;
 		}
 
@@ -155,6 +223,10 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 			switch (pOwnerExt->UpdateTemporalFreeze(pThis, pTarget))
 			{
 			case TemporalFreezeFrame::Erase:
+				// Same as above: this warp ends on its own schedule.
+				TemporalTemp::ScheduledEraseFrame = Unsorted::CurrentFrame;
+				TemporalTemp::ScheduledEraseVictim = pTarget->UniqueID;
+
 				return 0x71A895;
 			case TemporalFreezeFrame::KeepAlive:
 				return 0x71AB08;
@@ -165,7 +237,50 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 	}
 
 	// Recovering vanilla instructions that were broken by a hook call
-	return pThis->WarpRemaining <= 0 ? 0x71A895 : 0x71AB08;
+	if (pThis->WarpRemaining <= 0)
+	{
+		// The vanilla erase decision, i.e. a warp with no record of ours ending on its own counter
+		// (CellSpread.TemporalEraseMode=perunit without Temporal.Duration lands here).
+		TemporalTemp::ScheduledEraseFrame = Unsorted::CurrentFrame;
+		TemporalTemp::ScheduledEraseVictim = pThis->Target->UniqueID;
+
+		return 0x71A895;
+	}
+
+	return 0x71AB08;
+}
+
+// The engine's erase path ends by telling the caster that the unit it was warping is gone:
+// 0x71AAD5 loads the owner, 0x71AADC-0x71AAE0 load its vtable and push the arguments, and
+// 0x71AAE1 calls [owner_vt+0x484]. That call is what makes the caster let go of its own
+// TemporalImUsing - right for the unit the engine itself is warping, because that is the one being
+// erased, but a CellSpread shot holds its other victims on instances of their own. An extra's erase
+// therefore made the caster drop its *anchor*, and the anchor was freed instead of erased: the
+// reported "three targets in the radius, only two were erased, then it fired again at the survivor"
+// (2026-10-16 00:19 test, first shot). Which victim erases first is the victims' own AI order, so
+// the same shot came out right or wrong at random.
+//
+// The notification is skipped for every instance that is not the caster's own slot. The window here
+// is exactly three complete instructions (`mov edx,[ecx]`, `push 1`, `push ebx`), so the anchor's
+// case can simply return 0: Syringe replays those instructions and carries on at 0x71AAE1, which is
+// the engine's own call, untouched. Do *not* rebuild the arguments here by hand - pushing onto the
+// emulated stack from inside a handler writes into the handler's own live frame (its return address
+// sits at R->ESP() - 4) and corrupted it, which is what crashed 2026-10-16 00:32 inside
+// FootClass::ValidatePlacement with a null `this`.
+DEFINE_HOOK(0x71AADC, TemporalClass_Update_EraseNotify, 0x5)
+{
+	GET(TemporalClass*, pThis, ESI);
+
+	const auto pOwner = pThis->Owner;
+
+	// Not the anchor: the unit being erased is not the one the caster's slot holds, so the caster
+	// must not be told its target is gone (it would drop the anchor along with it). Skipping the
+	// call outright also skips its two pushes, so the stack stays as it is.
+	if (!pOwner || pThis != pOwner->TemporalImUsing)
+		return 0x71AAE7;
+
+	// The anchor itself: exactly what the engine would have done on its own.
+	return 0;
 }
 
 // TemporalClass::Fire sets target->BeingWarpedOut at 0x71B0EA, which is where a warp actually
@@ -178,6 +293,15 @@ DEFINE_HOOK(0x71B0EA, TemporalClass_Fire_BeginTemporalFreeze, 0x7)
 	GET(TemporalClass*, pTemporal, ESI);
 	GET(TechnoClass*, pTarget, ECX);
 
+	// Temporal.UseCurrentHealth: the instructions just above this point set the erase counter to
+	// the target's *type* Strength times ten (0x71AFA1-0x71AFB9), which is why a unit that is
+	// almost dead still takes the whole vanilla erase time. With the key on, the counter follows
+	// the health the unit actually has at the moment the warp starts.
+	const auto pWeapon = TechnoExt::GetTemporalWarpWeapon(pTemporal->Owner);
+
+	if (pWeapon && WarheadTypeExt::Fetch(pWeapon->Warhead)->Temporal_UseCurrentHealth)
+		pTemporal->WarpRemaining = TechnoExt::GetFreezeHealth(pTarget, pWeapon->Warhead) * 10;
+
 	if (const auto pOwnerExt = TechnoExt::TryFetch(pTemporal->Owner))
 		pOwnerExt->BeginTemporalFreeze(pTemporal, pTarget);
 
@@ -189,12 +313,53 @@ DEFINE_HOOK(0x71B0EA, TemporalClass_Fire_BeginTemporalFreeze, 0x7)
 // (the four calls inside one function around 0x4FC6D0). A fixed-duration freeze has to pay what
 // the target owes for the time it was actually frozen on both routes - hooking only one of them
 // would leak the record whenever the engine cancels a warp on its own.
+//
+// Letting go of the caster's own TemporalImUsing is also what releases the rest of a CellSpread
+// Temporal shot: the victims besides the one the engine warps are held by instances of their own
+// (see Ext/Bullet/Hooks.DetonateLogics.cpp), and every route that makes a caster stop holding a
+// victim - it stops attacking, retargets, is destroyed, enters limbo, hands the victim to another
+// caster - goes through the caster's slot.
+//
+// That release is only for a warp that was *broken off*, though. A warp that ended on its own
+// schedule (the pooled erase running out, or a plain per-unit counter reaching zero) also lets go
+// of the slot, from inside the engine's own erase path, and releasing the other victims then would
+// unfreeze the rest of the radius on the very frame they were all supposed to leave on - one unit
+// erased, the others merely freed (2026-10-15 23:48 test: three frozen, 291 frame pool, 1 erased /
+// 2 freed). TemporalTemp::ScheduledEraseFrame is what tells the two apart: it is stamped on the
+// frame a warp is erased by its own schedule, so a let-go on that same frame is the engine
+// finishing a warp, and anything else is the caster giving one up.
+//
+// A caster that gives one up also stops owing the freeze hold on its reload: the hold was written
+// to last exactly as long as the erase would have (SyncTemporalRearm), and once the freeze is gone
+// keeping it would lock the weapon out for a freeze that is no longer happening.
 DEFINE_HOOK(0x71ABC0, TemporalClass_LetGo_TemporalFreeze, 0x6)
 {
 	GET(TemporalClass*, pThis, ECX);
 
-	if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
+	const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner);
+
+	if (pOwnerExt)
 		pOwnerExt->EndTemporalFreeze(pThis);
+
+	if (const auto pOwner = pThis->Owner; pOwner && pThis == pOwner->TemporalImUsing)
+	{
+		// The engine's own erase of *this* warp, and nothing else: a let-go in the same frame as
+		// some other victim's erase is still the caster giving the warp up (the frame alone is not
+		// enough to tell them apart - one frame can see both).
+		const bool ownEnd = TemporalTemp::ScheduledEraseFrame == Unsorted::CurrentFrame
+			&& (!pThis->Target || pThis->Target->UniqueID == TemporalTemp::ScheduledEraseVictim);
+		const bool brokenOff = !ownEnd;
+
+		if (brokenOff)
+		{
+			TechnoExt::ReleaseExtraTemporalInstances(pOwner);
+
+			// Only when this feature is the one holding the reload: a plain Temporal warp has no
+			// base frame of ours and its engine reload must not be cut into.
+			if (pOwnerExt && pOwnerExt->TemporalRearmBaseFrame > 0)
+				pOwnerExt->SyncTemporalRearm();
+		}
+	}
 
 	return 0;
 }
@@ -203,10 +368,62 @@ DEFINE_HOOK(0x71AD40, TemporalClass_JustLetGo_TemporalFreeze, 0x6)
 {
 	GET(TemporalClass*, pThis, ECX);
 
-	if (const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner))
+	const auto pOwnerExt = TechnoExt::TryFetch(pThis->Owner);
+
+	if (pOwnerExt)
 		pOwnerExt->EndTemporalFreeze(pThis);
 
+	if (const auto pOwner = pThis->Owner;
+		pOwner && pThis == pOwner->TemporalImUsing && TemporalTemp::ScheduledEraseFrame != Unsorted::CurrentFrame)
+	{
+		TechnoExt::ReleaseExtraTemporalInstances(pOwner);
+
+		if (pOwnerExt && pOwnerExt->TemporalRearmBaseFrame > 0)
+			pOwnerExt->SyncTemporalRearm();
+	}
+
 	return 0;
+}
+
+// FootClass::ValidatePlacement (its single caller is 0x4D82D9) runs the vanilla rule "a foot unit
+// that is being (re)placed abandons the warp it is applying": 0x709A40 loads the unit's own
+// TemporalImUsing and calls LetGo on it. For a plain Temporal warp that is self-consistent - the
+// unit really did move. For a CellSpread shot it is not: the slot holds the *anchor*, the victim
+// the engine warps itself, which is scheduled to be erased on this very frame. On the frame a
+// pooled shot's victims leave, one of their erases makes the engine validate the caster's
+// placement, the caster lets the anchor go, and the anchor is then *freed* instead of erased while
+// the rest of the radius is erased on schedule (2026-10-16 00:40 test: 5 of the 9 shots, every
+// time from this exact address, always on the frame the pool was due).
+//
+// So a placement check must not abandon the warp while this techno still holds a pending pooled
+// erase record. The records carry the absolute frame the plan leaves on and each victim erases
+// itself on it, so nothing is held beyond its own schedule, and once the plan is done the vanilla
+// release goes through untouched. Other releases (stop attacking, retarget, death, limbo) do not
+// come through here at all - they still end the freeze on the next frame.
+//
+// The window is exactly one complete 6-byte instruction and hook + 5 = 0x709A48 lands *inside* it,
+// which is why this handler can never `return 0`: the stolen instruction is replayed by hand and
+// the return goes to 0x709A49, the start of the following `test`. 0x709A59 is the plain
+// continuation past the abandoned LetGo. Register writes only - the stack is not touched (the
+// previous crash came from writing to the emulated stack from inside a handler, see 0x71AADC).
+DEFINE_HOOK(0x709A43, FootClass_ValidatePlacement_TemporalKeepAnchor, 0x6)
+{
+	GET(TechnoClass*, pThis, ESI);
+
+	if (const auto pExt = TechnoExt::TryFetch(pThis))
+	{
+		for (const auto& record : pExt->TemporalFreezes)
+		{
+			// Same predicate the reload hold uses for a pending pooled record (Body.cpp,
+			// HoldTemporalRearm / SyncTemporalRearm): active, and still waiting for its frame.
+			if (record.Active && record.EraseFrame > 0)
+				return 0x709A59;
+		}
+	}
+
+	R->ECX(pThis->TemporalImUsing);
+
+	return 0x709A49;
 }
 
 DEFINE_HOOK_AGAIN(0x51B389, FootClass_TunnelAI_Enter, 0x6) // InfantryClass_TunnelAI

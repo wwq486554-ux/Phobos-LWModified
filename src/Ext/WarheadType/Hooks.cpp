@@ -503,6 +503,12 @@ DEFINE_HOOK(0x6FC5F2, TechnoClass_GetFireError_TemporalAllowDamage, 0x6)
 	return Illegal;
 }
 
+// Vanilla already refuses to fire a Temporal weapon at the unit the caster is warping - that is
+// the gate at 0x6FC159, and it is what holds a Chrono Legionnaire's fire for the whole erasure.
+// A CellSpread Temporal shot leaves that gate alone: the unit the engine warps goes through the
+// caster's own TemporalImUsing slot, so the vanilla gate keeps answering for it, and the rest of
+// the radius is held by instances of its own (see Ext/Bullet/Hooks.DetonateLogics.cpp).
+//
 // The tail of TechnoClass::MouseOverObject: with the weapon check having failed, the engine
 // still offers Action::Select for the object under the cursor - unless that object is warped
 // out, in which case it answers Action::None and a click on it does nothing at all, not even

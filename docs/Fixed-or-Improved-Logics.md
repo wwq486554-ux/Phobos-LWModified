@@ -3087,6 +3087,53 @@ Temporal.ZeroHealthAction=erase   ; erase or linger
 Temporal.KilledByOthers=normal    ; normal or erase
 ```
 
+### Measure a `Temporal` warp by current health
+
+- A Temporal warp is as long as the target's *type* says: the erase counter the engine sets when the warp starts is the target's `Strength` times ten, so a unit that is almost dead takes exactly as long to erase as a fresh one. That is vanilla behaviour, not something this fork introduced.
+- `Temporal.UseCurrentHealth=yes` measures that counter against the health the unit actually has when the warp starts instead, so chipping a unit down before warping it makes it leave that much sooner.
+- It works on any `Temporal=yes` warhead, with or without `CellSpread`, and it is what the area erase below adds up when it has to weigh a mixed radius. `no`, the default, leaves the vanilla behaviour intact down to the instruction.
+- The *damage* a `Temporal.Duration` freeze pays out is unaffected: that is the freeze's own erase rate over the time it lasted, not something read off the target's health.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWARHEAD]                   ; WarheadType
+Temporal=yes
+Temporal.UseCurrentHealth=yes   ; boolean
+```
+
+### Make a `Temporal` warhead respect `CellSpread`
+
+- In vanilla a `Temporal=yes` warhead warps exactly one unit no matter what its `CellSpread` says: the detonation code branches on the warhead, hands the bullet's own target to `TemporalClass::Fire` and jumps over `MapClass::DamageArea` entirely, so the radius is never walked. A Chrono Legionnaire-style area warhead therefore froze its direct target and silently ignored everything else in the blast.
+- A Temporal warhead now warps every unit inside its `CellSpread`, each exactly the way a direct hit warps one:
+  - `CellSpread.Cylinder` is honoured, the same as for the warhead's other per-target effects.
+  - It applies to a warhead that detonates on empty ground as well (no direct target at all), which vanilla leaves without warping anything.
+  - The warhead's own target filters decide who is hit: `AffectsOwner`, `AffectsAllies`, `AffectsEnemies` and `AffectsNeutral`, the same ones its `AttachEffects`, `Convert` and so on use.
+  - Units the engine refuses to warp for its own reasons (an iron-curtained one, an occupied building) are skipped, exactly as a direct hit on them would be.
+- Each victim is held by a warp of its own, so with `Temporal.Duration` every one of them gets its own duration and its own damage for the time it was actually frozen. The unit the engine's own hit warps keeps using the caster's usual Temporal instance; the rest of the radius gets an instance of its own, which is what lets one caster hold several units at once.
+- Several Temporal warps on one victim still stack the vanilla way: the engine chains the extra ones as helpers and sums the per-frame erase rate over the chain. When the warp holding the victim lets go, the next one on the chain takes it over - so with `Temporal.Duration` the casters take turns, and the target is held for one duration after another, paying each caster in turn.
+- The caster cannot fire at the unit it is already warping, exactly as for a direct hit: that is the engine's own gate, and it reads the single Temporal instance a techno keeps - which is the very instance the engine's own hit on an area shot goes through.
+- The caster's warps are released the moment it stops attacking them: a Stop order, a new target, the target being gone, the caster dying or being limboed all hand every victim back on the next frame. Every one of those engine routes is wired to that same single Temporal instance, so the shot puts one of its victims there and the rest of the radius is released along with it - no separate release path has to be re-implemented for them, and none of those routes has to be known by name.
+- The shot holds its caster until the last unit it covered is gone, and units that move into the radius afterwards are not part of it. That is not the weapon's `ROF` at work: delivering the shot pushes the caster's reload - the same timer `Temporal.Interval` and `SweepFire` sit on - out to cover the whole freeze, so it cannot fire again while the units the shot covered are still frozen. The engine's own "this techno is holding a warp" gate is deliberately not relied on for that: the check it makes also wants a locomotion field to be set, so which units it actually holds back depends on their class. On a ground burst the shot also keeps one of its victims in the caster's Temporal instance, because that is what the engine's release paths (Stop, a new target, death, limbo) act on - the victim that outlives the others, handed over to another victim that is still held if that one is lost first. How many of the shot's victims die, and when, changes neither the freeze nor the number of shots.
+- `Temporal.Interval` is the cooldown that follows: it is counted from the end of this freeze (the moment the last unit the shot covered is gone, where the caster's reload is pushed out to `Interval` frames) to the start of the next one. `Temporal.Interval=0` adds nothing, so a shot is paced by its own freeze and by the weapon's ordinary firing rules. Without the hold above, the caster would fire a second shot the moment the first victim went, while the rest of the radius was still frozen, and those victims would carry two stacked warps - double the erase rate and, with `Temporal.Duration`, a second payout of the same freeze.
+- Every victim is erased on a timer of its own, the same one a direct hit would get, so the weakest unit of the radius leaves first and the last one may still be held for a while after it. `CellSpread.TemporalEraseMode=pooled` replaces that with one timer for the whole shot: the vanilla erase times of the units it covers are added up - each one's health times ten, taken off at the warp's per-frame erase rate - the whole radius is held for that combined time, and every victim is erased on the same frame.
+  - A victim another caster is already warping is not part of that total: the engine chains this shot onto the warp that is already there (the relay), so its erasure is not this shot's to schedule.
+  - `pooled` settles *when* the victims leave, nothing else. `Temporal.Duration` still governs the damage window when it is set, and a window that runs out before the pooled time does not hand anyone back early - the victims stay frozen until the combined time is up and then leave together.
+  - `perunit`, the default, is the behaviour without the key: each victim on its own timer, in its own time.
+- `CellSpread` and `CellSpread.TemporalEraseMode` are the only switches: a Temporal warhead without `CellSpread` (`0`, the default) keeps vanilla behaviour down to the instruction, and so does `perunit`.
+
+In `rulesmd.ini`:
+```ini
+[SOMEWARHEAD]                        ; WarheadType
+Temporal=yes
+CellSpread=3
+CellSpread.TemporalEraseMode=perunit ; perunit or pooled
+Temporal.UseCurrentHealth=no         ; boolean
+```
+
+```{note}
+`Temporal.AllowDamage` and `Temporal.AllowAttachEffects` are read from the warhead that is *holding* a victim. When several casters hold the same victim, that is the one at the head of the chain - the instance the victim's own per-frame update runs on.
+```
+
 ### Allowing damage dealt to firer
 
 - You can now allow warhead to deal damage (and apply damage-adjacent effects such as `KillDriver` and `DisableWeapons/Sonar/Flash.Duration` *(Ares features)*) on the object that is considered as the firer of the Warhead even if it does not have `DamageSelf=true`.

@@ -875,6 +875,32 @@ namespace detail
 	}
 
 	template <>
+	inline bool read<TemporalEraseMode>(TemporalEraseMode& value, INI_EX& parser, const char* pSection, const char* pKey)
+	{
+		if (parser.ReadString(pSection, pKey))
+		{
+			static const std::pair<const char*, TemporalEraseMode> Names[] =
+			{
+				{"perunit", TemporalEraseMode::PerUnit},
+				{"pooled", TemporalEraseMode::Pooled},
+			};
+
+			for (auto const& [name, val] : Names)
+			{
+				if (_strcmpi(parser.value(), name) == 0)
+				{
+					value = val;
+					return true;
+				}
+			}
+
+			Debug::INIParseFailed(pSection, pKey, parser.value(), "Expected perunit or pooled");
+		}
+
+		return false;
+	}
+
+	template <>
 	inline bool read<SuddenDeathMode>(SuddenDeathMode& value, INI_EX& parser, const char* pSection, const char* pKey)
 	{
 		if (parser.ReadString(pSection, pKey))

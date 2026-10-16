@@ -23,6 +23,9 @@ namespace TemporalTemp
 {
 	bool PayingFreezeDamage = false;
 	bool FreezeDamageWasLethal = false;
+	bool MovingWarp = false;
+	int ScheduledEraseFrame = 0;
+	DWORD ScheduledEraseVictim = 0;
 }
 
 TechnoExt::~TechnoExt()
@@ -2076,7 +2079,7 @@ void TechnoExt::Serialize(T& Stm)
 		.Process(this->PreventCrewEscape)
 		.Process(this->Sweeps)
 		.Process(this->SweepFireCooldownTimer)
-		.Process(this->TemporalFreeze)
+		.Process(this->TemporalFreezes)
 		.Process(this->TemporalLingerSaved)
 		.Process(this->TemporalErasePending)
 		;
@@ -2145,6 +2148,61 @@ bool TechnoExt::SaveGlobals(PhobosStreamWriter& Stm)
 // =============================
 // container hooks
 
+// Releases every TemporalClass this techno owns apart from TemporalImUsing. A CellSpread Temporal
+// freeze is delivered by one instance per victim instead of by TemporalImUsing (see
+// Ext/Bullet/Hooks.DetonateLogics.cpp), and the engine only ever lets go of TemporalImUsing. Left
+// alone, those instances keep a pointer to an Owner that is about to be destroyed - and
+// TemporalClass::GetWarpPerStep dereferences it every frame the victim stays warped out - or keep
+// a victim warped out for a techno that no longer has a Temporal weapon at all.
+// LetGo first, so the victim is not left warped out, and so the victim is handed over to the next
+// instance on its chain - the same relay a chain of casters gets from the engine.
+//
+// An instance that has not been given a target yet is left alone on purpose: TemporalClass::Fire
+// lets go of the caster's TemporalImUsing before it takes its own target, so this runs from inside
+// that call for the very instance being set up - deleting it here would pull a live object out
+// from under the running Fire. An instance the engine refused outright is deleted by the caller
+// that created it instead. includeIdle lifts that exception for the callers that are tearing the
+// caster down rather than releasing a warp: an idle instance is unreferenced (LetGo and JustLetGo
+// clear the victim's TemporalTargetingMe too) but it still points at its Owner, and
+// TemporalClass::Update calls a virtual on that Owner, so one left behind would outlive the caster.
+void TechnoExt::ReleaseExtraTemporalInstances(TechnoClass* pOwner, bool includeIdle)
+{
+	if (!pOwner)
+		return;
+
+	for (int i = TemporalClass::Array.Count - 1; i >= 0; --i)
+	{
+		const auto pTemporal = TemporalClass::Array.GetItem(i);
+
+		if (!pTemporal || pTemporal->Owner != pOwner || pTemporal == pOwner->TemporalImUsing)
+			continue;
+
+		if (!pTemporal->Target)
+		{
+			if (!includeIdle)
+				continue;
+
+			GameDelete(pTemporal);
+			continue;
+		}
+
+		// Only an instance its own victim still points at may be let go of. TemporalClass::Fire
+		// chains a warp started on a unit another caster is already holding onto *that* caster's
+		// instance as a helper, so this techno can own an instance whose victim belongs to someone
+		// else's chain - and the chain that erases the victim does not clear a helper's target, so
+		// that target can be dead already. LetGo dereferences it (0x71AC1D-0x71AC25) and calls
+		// through whatever the freed object now holds: this is the wild jump the guard keeps out
+		// (crash of 2026-10-15 22:07, EIP landing in gamemd's jump table). An instance that fails
+		// the check is left alone rather than deleted: it is part of another warp's chain, and
+		// pulling it out of that chain would leave the engine walking freed links.
+		if (pTemporal->Target->TemporalTargetingMe != pTemporal)
+			continue;
+
+		pTemporal->LetGo();
+		GameDelete(pTemporal);
+	}
+}
+
 // The extension is allocated by the concrete leaf constructors (UnitClass/InfantryClass/
 // BuildingClass/AircraftClass), not here at the abstract TechnoClass level.
 
@@ -2156,6 +2214,8 @@ DEFINE_HOOK(0x6F4500, TechnoClass_DTOR, 0x5)
 
 	if (pItem->AbstractFlags & AbstractFlags::Foot)
 		pItem->Owner->RecheckTechTree = true; // for SW.AuxTechons and SW.NegTechnos
+
+	TechnoExt::ReleaseExtraTemporalInstances(pItem, true);
 
 	return 0;
 }
@@ -2244,13 +2304,51 @@ static int GetFreezeErasePerFrame(TechnoClass* pOwner, WeaponTypeClass* pWeapon,
 	return step;
 }
 
+// The health a Temporal warp's length is measured against. Vanilla reads it off the *type*: the
+// counter Fire stores is the target's Strength times ten (0x71AFA1-0x71AFB9), so a unit that is
+// almost dead takes exactly as long to erase as a fresh one. Temporal.UseCurrentHealth is what
+// makes it follow the health the unit actually has instead.
+int TechnoExt::GetFreezeHealth(TechnoClass* pVictim, WarheadTypeClass* pWarhead)
+{
+	if (!pVictim)
+		return 0;
+
+	if (pWarhead && WarheadTypeExt::Fetch(pWarhead)->Temporal_UseCurrentHealth)
+		return Math::max(pVictim->Health, 1);
+
+	return pVictim->GetType()->Strength;
+}
+
+// How many frames vanilla itself would take to erase this victim with this caster's warp: the
+// health above times ten, taken off in steps of the warp's per-frame erase rate, rounded up the
+// way the engine's own counter reaches zero. 0 when there is no usable weapon or rate.
+int TechnoExt::GetTemporalEraseFrames(TechnoClass* pOwner, TechnoClass* pVictim, WarheadTypeClass* pWarhead)
+{
+	if (!pOwner || !pVictim || !pWarhead)
+		return 0;
+
+	const auto pWeapon = GetTemporalWarpWeapon(pOwner);
+
+	if (!pWeapon)
+		return 0;
+
+	const int step = GetFreezeErasePerFrame(pOwner, pWeapon, pVictim, pWarhead);
+
+	if (step <= 0)
+		return 0;
+
+	const long long counter = static_cast<long long>(GetFreezeHealth(pVictim, pWarhead)) * 10;
+
+	return static_cast<int>((counter + step - 1) / step);
+}
+
 // Deals the damage a freeze still owes. Returns true when that would have killed the target, in
 // which case ReceiveDamage clamped it to 1 HP instead of running the normal death path - the
 // caller then asks the engine for the warp erase, which removes the unit without a wreck and
 // without firing a DeathWeapon.
-static bool PayTemporalFreeze(TechnoExt* pExt, TechnoClass* pTarget, TechnoClass* pOwner, int amount)
+static bool PayTemporalFreeze(TemporalFreezeInstance& record, TechnoClass* pTarget, TechnoClass* pOwner, int amount)
 {
-	if (!pTarget || !pOwner || amount <= 0 || !pExt->TemporalFreeze.Warhead)
+	if (!pTarget || !pOwner || amount <= 0 || !record.Warhead)
 		return false;
 
 	// The freeze's own damage is never gated by Temporal.AllowDamage (that key only says
@@ -2260,7 +2358,7 @@ static bool PayTemporalFreeze(TechnoExt* pExt, TechnoClass* pTarget, TechnoClass
 
 	TemporalTemp::PayingFreezeDamage = true;
 	TemporalTemp::FreezeDamageWasLethal = false;
-	pTarget->ReceiveDamage(&damage, 0, pExt->TemporalFreeze.Warhead, pOwner, true, false, pOwner->Owner);
+	pTarget->ReceiveDamage(&damage, 0, record.Warhead, pOwner, true, false, pOwner->Owner);
 	const bool lethal = TemporalTemp::FreezeDamageWasLethal;
 	TemporalTemp::PayingFreezeDamage = false;
 	TemporalTemp::FreezeDamageWasLethal = false;
@@ -2268,13 +2366,38 @@ static bool PayTemporalFreeze(TechnoExt* pExt, TechnoClass* pTarget, TechnoClass
 	return lethal;
 }
 
-// Clears a freeze record without paying anything or touching the caster's cooldown. The
-// scalar fields are left as they were - only their presence in the record matters.
-static void ResetTemporalFreeze(TemporalFreezeInstance& record)
+// The record this caster holds for one victim, or nullptr. A CellSpread Temporal warhead holds
+// every unit in its radius at once, so there may be several at the same time and every lookup
+// goes through TargetID - a raw pointer would not survive a save/load.
+static TemporalFreezeInstance* FindTemporalFreeze(std::vector<TemporalFreezeInstance>& records, DWORD targetID)
 {
-	record.Active = false;
-	record.Warhead = nullptr;
-	record.TickTimer.Stop();
+	for (auto& record : records)
+	{
+		if (record.Active && record.TargetID == targetID)
+			return &record;
+	}
+
+	return nullptr;
+}
+
+// Drops a record found by FindTemporalFreeze. Kept separate so callers do not have to turn the
+// pointer back into an iterator themselves.
+static void EraseTemporalFreeze(std::vector<TemporalFreezeInstance>& records, TemporalFreezeInstance* pRecord)
+{
+	if (pRecord)
+		records.erase(records.begin() + (pRecord - records.data()));
+}
+
+// Whether this techno holds a pooled record for that victim whose frame has come (see the header).
+bool TechnoExt::IsPooledEraseDue(TechnoClass* pVictim)
+{
+	if (!pVictim)
+		return false;
+
+	if (auto* pRecord = FindTemporalFreeze(this->TemporalFreezes, pVictim->UniqueID))
+		return pRecord->EraseFrame > 0 && Unsorted::CurrentFrame >= pRecord->EraseFrame;
+
+	return false;
 }
 
 // Temporal.Interval: the gap between one freeze ending and the next one starting. The target is
@@ -2284,7 +2407,13 @@ static void ResetTemporalFreeze(TemporalFreezeInstance& record)
 // what keeps the next freeze from starting early, and the cursor and the AI see the same thing.
 // Using the engine's timer also means the cooldown is saved and loaded for free. Only ever
 // extended - a longer vanilla reload is left alone.
-static void StartTemporalFreezeCooldown(TechnoClass* pOwner, int frames)
+//
+// A CellSpread Temporal shot uses the same timer to cover the length of its own freeze. It cannot
+// lean on the engine's "this techno is holding a warp" gate for that: the check the engine makes
+// there (0x741206) also wants TechnoClass +0x5A4 to be set, which is a locomotion-side field, so
+// which units that gate actually holds back depends on the class. The reload timer is universal -
+// every class' firing path consults it, and SweepFire and Temporal.Interval already rely on it.
+void TechnoExt::ExtendTemporalRearm(TechnoClass* pOwner, int frames)
 {
 	if (!pOwner || frames <= 0)
 		return;
@@ -2293,12 +2422,119 @@ static void StartTemporalFreezeCooldown(TechnoClass* pOwner, int frames)
 		pOwner->RearmTimer.Start(frames);
 }
 
-void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
+static void StartTemporalFreezeCooldown(TechnoClass* pOwner, int frames)
 {
-	if (!pTemporal || !pTarget || !pTemporal->Owner)
+	if (!pOwner || frames <= 0)
 		return;
 
-	const auto pOwner = pTemporal->Owner;
+	const auto pExt = TechnoExt::TryFetch(pOwner);
+
+	// Remember the frame this cooldown runs out on, so that a trim of the freeze hold
+	// (SyncTemporalRearm) cannot take it back with it.
+	if (pExt)
+		pExt->TemporalRearmIntervalFrame = Math::max(pExt->TemporalRearmIntervalFrame, Unsorted::CurrentFrame + frames);
+
+	// This runs whenever a freeze ends, so it is also where the reload is recomputed: the hold of
+	// the record that just went away is no longer owed, and neither is the rest of a shot whose
+	// last victim is gone. Only when this feature is the one holding the timer, though - an
+	// ordinary techno with Temporal.Interval must keep the engine's own (possibly longer) reload.
+	if (pExt && (pExt->TemporalRearmBaseFrame > 0 || !pExt->TemporalFreezes.empty()))
+		pExt->SyncTemporalRearm();
+	else
+		TechnoExt::ExtendTemporalRearm(pOwner, frames);
+}
+
+// The caster-side half of the pooled schedule: a pooled CellSpread shot is held open until the
+// absolute frame its victims were told to leave on, and this pushes the caster's reload out to
+// that frame again every frame the freeze runs. A single push at delivery time has to survive the
+// whole freeze on its own, and the timer has other writers in the meantime: the engine starts it
+// again on every shot (0x6FF2AA), and this fork's own features scale its remaining time (the
+// AttachEffect ROF modifiers) or stop it outright (SweepFire's abort). A shot that gets out that
+// way cannot schedule the units the previous one is still holding - at that moment every unit in
+// the radius is one this caster is already warping, and a victim can only pick a schedule up from
+// a warp that is being started - so those victims fall back to the engine's own per-victim erase
+// counter and leave one after another instead of together. (A helper instance chained onto one of
+// them makes that worse: TemporalClass::Update adds the whole helper chain's per-frame step to the
+// counter at 0x71AB10.)
+//
+// Only pooled records hold the reload, and only ever for longer: once the last of them is past
+// its frame nothing is pushed any more and the ordinary reload applies again. This also means it
+// cannot wedge the caster - a victim whose own update stops running (it entered a transport, say)
+// stops being held the moment its frame is behind us.
+void TechnoExt::HoldTemporalRearm()
+{
+	bool holding = false;
+
+	for (auto const& record : this->TemporalFreezes)
+	{
+		if (record.Active && record.EraseFrame > 0)
+		{
+			holding = true;
+			break;
+		}
+	}
+
+	// Nothing of this techno's is being held back: leave the timer alone (a plain Temporal unit's
+	// own reload, for one, has nothing to do with this).
+	if (holding)
+		this->SyncTemporalRearm();
+}
+
+// Everything the caster still owes on its reload, written back as it is (see the header). Forcing
+// the value is the point: the freeze hold has to be able to shrink when the shot it belonged to is
+// broken off, or when one of its victims stops being held (killed by someone else, walked too far
+// from the caster, ...). The engine's own reload and Temporal.Interval are read back from their
+// deadlines and never given up here.
+void TechnoExt::SyncTemporalRearm()
+{
+	const auto pOwner = this->OwnerObject();
+
+	if (!pOwner)
+		return;
+
+	int frames = 0;
+
+	for (auto const& record : this->TemporalFreezes)
+	{
+		if (record.Active && record.EraseFrame > 0)
+			frames = Math::max(frames, record.EraseFrame - Unsorted::CurrentFrame + 1);
+	}
+
+	if (this->TemporalRearmBaseFrame > 0)
+		frames = Math::max(frames, this->TemporalRearmBaseFrame - Unsorted::CurrentFrame);
+
+	if (this->TemporalRearmIntervalFrame > 0)
+		frames = Math::max(frames, this->TemporalRearmIntervalFrame - Unsorted::CurrentFrame);
+
+	if (frames < 0)
+		frames = 0;
+
+	// Only write when the value is actually wrong: during a freeze the countdown matches the hold
+	// on its own, so this leaves the engine's own timer alone then and only steps in when it has to
+	// be shortened (a freeze broken off, or one of its victims dropped).
+	if (pOwner->RearmTimer.GetTimeLeft() != frames)
+		pOwner->RearmTimer.Start(frames);
+}
+
+void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
+{
+	if (!pTemporal || !pTemporal->Owner)
+		return;
+
+	// A warp handed over to another instance (see TemporalTemp::MovingWarp) keeps the record it
+	// already has: the freeze is a continuation, not a new one, so nothing about it may restart.
+	if (TemporalTemp::MovingWarp)
+		return;
+
+	this->BeginTemporalFreezeFor(pTarget);
+}
+
+void TechnoExt::BeginTemporalFreezeFor(TechnoClass* pTarget)
+{
+	if (!pTarget)
+		return;
+
+	const auto pOwner = this->OwnerObject();
 	const auto pWeapon = GetTemporalWarpWeapon(pOwner);
 
 	if (!pWeapon)
@@ -2307,30 +2543,63 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 	const auto pWHExt = WarheadTypeExt::Fetch(pWeapon->Warhead);
 	const int duration = pWHExt->Temporal_Duration;
 
-	// The default, 0, leaves the vanilla warp alone: WarpRemaining decides when the target
-	// is erased and the warhead's own erase rate decides how fast.
-	if (duration <= 0)
+	// CellSpread.TemporalEraseMode=pooled: the delivery added up how long the shot's whole radius
+	// has to be held and left it on the caster, for the warps it is about to start. It is only
+	// good for the frame it was written on - the shot's warps are all created on it (the engine's
+	// own hit on the direct target included, which happens right after the delivery hook returns).
+	//
+	// The frame stamp alone is what counts, not the list of victims that came with it: a unit whose
+	// per-frame step could not be worked out is named in the plan with a stand-in of one frame, and
+	// its warp still has to leave with the shot. Leaving such a warp without a schedule is what let
+	// one unit of an area freeze go on its own while the rest waited out the pool.
+	int eraseAt = 0;
+
+	if (this->TemporalAreaFrame == Unsorted::CurrentFrame && this->TemporalAreaEraseAt > 0)
+		eraseAt = this->TemporalAreaEraseAt;
+
+	// A pooled shot with no Temporal.Duration at all still needs the record: it is what holds the
+	// victims past their own erase timers and erases them together.
+	if (duration <= 0 && eraseAt <= 0)
 		return;
 
-	const int erasePerFrame = GetFreezeErasePerFrame(pOwner, pWeapon, pTarget, pWeapon->Warhead);
+	int total = 0;
 
-	if (erasePerFrame <= 0)
-		return;
+	if (duration > 0)
+	{
+		const int erasePerFrame = GetFreezeErasePerFrame(pOwner, pWeapon, pTarget, pWeapon->Warhead);
 
-	const long long owed = static_cast<long long>(duration) * erasePerFrame / 10;
+		if (erasePerFrame <= 0)
+			return;
 
-	if (owed <= 0)
-		return;
+		const long long owed = static_cast<long long>(duration) * erasePerFrame / 10;
 
-	const int total = MapClass::GetTotalDamage(static_cast<int>(owed), pWeapon->Warhead, pTarget->GetType()->Armor, 0);
+		if (owed <= 0)
+			return;
 
-	if (total <= 0)
-		return;
+		total = MapClass::GetTotalDamage(static_cast<int>(owed), pWeapon->Warhead, pTarget->GetType()->Armor, 0);
 
-	auto& record = this->TemporalFreeze;
+		if (total <= 0)
+			return;
+	}
+
+	auto* pRecord = FindTemporalFreeze(this->TemporalFreezes, pTarget->UniqueID);
+
+	if (!pRecord)
+	{
+		this->TemporalFreezes.emplace_back();
+		pRecord = &this->TemporalFreezes.back();
+	}
+
+	auto& record = *pRecord;
 	record.Active = true;
 	record.TargetID = pTarget->UniqueID;
 	record.Duration = duration;
+	record.EraseAt = eraseAt;
+	// Pooled erase is scheduled on an absolute frame, not on the per-victim counter: every victim
+	// of the shot leaves on the same frame however the frame's AI order fell, and the caster's
+	// reload is held to that frame (HoldTemporalRearm) instead of to a count that the victims
+	// each advance for themselves.
+	record.EraseFrame = eraseAt > 0 ? Unsorted::CurrentFrame + eraseAt : 0;
 	// The gap between two freezes is paced the way the weapon's own reload is: the ROF curve
 	// scales it, so a curve that spins up tightens the gap and one that winds down widens it.
 	// Reading it here stores the value the freeze began with, which is what a save taken in the
@@ -2341,11 +2610,14 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 	// holds the target far beyond that: without telling the curve how long this cycle really
 	// lasts, every shot would look like the chain had stopped and the progress would be pinned
 	// at the start no matter what the curve says. The next shot is expected once the freeze and
-	// the interval are over - or at the reload, whichever the engine holds it to longer.
+	// the interval are over - or at the reload, whichever the engine holds it to longer. A pooled
+	// shot's freeze is the longer of its damage window and its pooled erase.
+	const int freezeFrames = std::max(duration, eraseAt);
+
 	if (this->ROFCurveWeapon == pWeapon)
 	{
 		const int elapsed = Math::max(Unsorted::CurrentFrame - this->ROFCurveLastFrame, 0);
-		this->ROFCurveLastRearm = Math::max(this->ROFCurveLastRearm, elapsed + duration + record.Interval);
+		this->ROFCurveLastRearm = Math::max(this->ROFCurveLastRearm, elapsed + freezeFrames + record.Interval);
 	}
 
 	record.TickRof = std::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier));
@@ -2359,37 +2631,51 @@ void TechnoExt::BeginTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarg
 
 void TechnoExt::AbandonTemporalFreeze(TechnoClass* pTarget)
 {
-	auto& record = this->TemporalFreeze;
-
-	if (!record.Active || (pTarget && pTarget->UniqueID != record.TargetID))
+	if (!pTarget)
 		return;
 
-	StartTemporalFreezeCooldown(this->OwnerObject(), record.Interval);
-	ResetTemporalFreeze(record);
+	auto* pRecord = FindTemporalFreeze(this->TemporalFreezes, pTarget->UniqueID);
+
+	if (!pRecord)
+		return;
+
+	const int interval = pRecord->Interval;
+	EraseTemporalFreeze(this->TemporalFreezes, pRecord);
+	StartTemporalFreezeCooldown(this->OwnerObject(), interval);
 }
 
-void TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
+bool TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
 {
-	auto& record = this->TemporalFreeze;
+	if (!pTemporal)
+		return false;
 
-	if (!record.Active || !pTemporal)
-		return;
+	// The freeze is not ending, it is only changing instance (see TemporalTemp::MovingWarp), so
+	// nothing is settled and the caster's cooldown is not started here.
+	if (TemporalTemp::MovingWarp)
+		return false;
 
 	const auto pTarget = pTemporal->Target;
 
-	// Another warp's record: this caster can only hold one freeze at a time, but its
-	// Temporal instance may already have been re-targeted by the time it lets go.
-	if (pTarget && pTarget->UniqueID != record.TargetID)
-		return;
+	// A record is keyed by its victim, so without one there is nothing to settle here. The hook
+	// calling this runs on TemporalClass::LetGo/JustLetGo entry, where Target is still set.
+	if (!pTarget)
+		return false;
 
-	if (pTarget && pTarget->IsAlive && record.Warhead && record.Duration > 0)
+	auto* pRecord = FindTemporalFreeze(this->TemporalFreezes, pTarget->UniqueID);
+
+	if (!pRecord)
+		return false;
+
+	auto& record = *pRecord;
+
+	if (pTarget->IsAlive && record.Warhead && record.Duration > 0)
 	{
 		const int due = static_cast<int>(static_cast<long long>(record.Total) * record.Elapsed / record.Duration);
 		const int owed = due - record.Paid;
 
 		if (owed > 0)
 		{
-			PayTemporalFreeze(this, pTarget, pTemporal->Owner, owed);
+			PayTemporalFreeze(record, pTarget, pTemporal->Owner, owed);
 			record.Paid = due;
 		}
 	}
@@ -2402,28 +2688,34 @@ void TechnoExt::EndTemporalFreeze(TemporalClass* pTemporal)
 	// right now: the erase cannot be issued from here, and the engine's own erase belongs to
 	// TemporalClass::ProcessTimeWarp. A victim that was kept at 1 HP by Temporal.ZeroHealthAction
 	// =linger therefore stays alive when the caster breaks off early instead of being erased.
-	if (pTarget)
+	if (const auto pTargetExt = TechnoExt::TryFetch(pTarget))
 	{
-		if (const auto pTargetExt = TechnoExt::TryFetch(pTarget))
-		{
-			pTargetExt->TemporalLingerSaved = false;
-			pTargetExt->TemporalErasePending = false;
-		}
+		pTargetExt->TemporalLingerSaved = false;
+		pTargetExt->TemporalErasePending = false;
 	}
 
-	StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
-	ResetTemporalFreeze(record);
+	const int interval = record.Interval;
+
+	EraseTemporalFreeze(this->TemporalFreezes, pRecord);
+	StartTemporalFreezeCooldown(pTemporal->Owner, interval);
+
+	// A record was there to settle: the warp was broken off, not finished by its own schedule.
+	return true;
 }
 
 TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, TechnoClass* pTarget)
 {
-	auto& record = this->TemporalFreeze;
-
-	if (!record.Active)
+	if (!pTemporal || !pTarget)
 		return TemporalFreezeFrame::NotHandled;
 
-	if (!pTemporal || !pTarget || pTarget->UniqueID != record.TargetID)
+	// Each victim has its own record: a CellSpread freeze holds several at once, and this is the
+	// update the victim's own AI runs for the instance that holds it.
+	auto* pRecord = FindTemporalFreeze(this->TemporalFreezes, pTarget->UniqueID);
+
+	if (!pRecord)
 		return TemporalFreezeFrame::NotHandled;
+
+	auto& record = *pRecord;
 
 	// After a save/load the warhead is not serialized; resolve it again from the caster's
 	// warp, and drop the record rather than guessing if that no longer works.
@@ -2434,19 +2726,24 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 
 		if (!record.Warhead)
 		{
-			record.Active = false;
+			EraseTemporalFreeze(this->TemporalFreezes, pRecord);
 			return TemporalFreezeFrame::NotHandled;
 		}
 	}
 
 	++record.Elapsed;
 
+	// CellSpread.TemporalEraseMode=pooled: this record's victim leaves together with the rest of
+	// the shot, on the frame the pooled counter (EraseAt) is used up - not when its own damage
+	// window ends and not when the engine's per-victim erase timer runs out.
+	const bool pooled = record.EraseAt > 0;
 	bool lethal = false;
 
 	// Damage accrues during the first Temporal.Duration frames only; the moment those are over
 	// the target is handed back (see below). Temporal.Interval is not part of the freeze: it is
-	// the caster's cooldown until the next one may start.
-	const bool damageDone = record.Elapsed >= record.Duration;
+	// the caster's cooldown until the next one may start. A record with no damage window at all
+	// (a pooled erase-only freeze) has nothing to pay and is done paying from the start.
+	const bool damageDone = record.Duration <= 0 || record.Elapsed >= record.Duration;
 
 	if (!damageDone && record.Mode == TemporalDamageMode::Continuous && record.TickTimer.Expired())
 	{
@@ -2455,22 +2752,63 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 
 		if (owed > 0)
 		{
-			lethal = PayTemporalFreeze(this, pTarget, pTemporal->Owner, owed);
+			lethal = PayTemporalFreeze(record, pTarget, pTemporal->Owner, owed);
 			record.Paid = due;
 		}
 
 		record.TickTimer.Start(record.TickRof);
 	}
-	else if (damageDone && record.Paid < record.Total)
+	else if (damageDone && record.Duration > 0 && record.Paid < record.Total)
 	{
 		// Last payment, once, for both modes: whatever the ticks have not covered yet.
 		const int owed = record.Total - record.Paid;
 
 		if (owed > 0)
 		{
-			lethal = PayTemporalFreeze(this, pTarget, pTemporal->Owner, owed);
+			lethal = PayTemporalFreeze(record, pTarget, pTemporal->Owner, owed);
 			record.Paid = record.Total;
 		}
+	}
+
+	if (pooled)
+	{
+		// Nothing may end this victim before the pooled counter is used up: not the engine's own
+		// erase timer (which the KeepAlive below keeps suppressing) and not a lethal payout
+		// either - the whole radius has to leave on one frame, which is the point of the mode.
+		// EraseFrame is absolute, so a victim whose own update lagged a frame still goes with the
+		// rest; a record from before the field existed falls back to its own counter.
+		const bool eraseDue = record.EraseFrame > 0
+			? Unsorted::CurrentFrame >= record.EraseFrame
+			: record.Elapsed >= record.EraseAt;
+
+		if (!eraseDue)
+			return TemporalFreezeFrame::KeepAlive;
+
+		// Whatever the elapsed time still owes, when a damage window was configured and the
+		// pooled counter ran out before that window did.
+		if (record.Duration > 0 && record.Paid < record.Total)
+		{
+			const int due = static_cast<int>(static_cast<long long>(record.Total) *
+				Math::min(record.Elapsed, record.Duration) / record.Duration);
+
+			if (due > record.Paid)
+			{
+				PayTemporalFreeze(record, pTarget, pTemporal->Owner, due - record.Paid);
+				record.Paid = due;
+			}
+		}
+
+		if (const auto pTargetExt = TechnoExt::TryFetch(pTarget))
+		{
+			pTargetExt->TemporalLingerSaved = false;
+			pTargetExt->TemporalErasePending = false;
+		}
+
+		const int interval = record.Interval;
+		EraseTemporalFreeze(this->TemporalFreezes, pRecord);
+		StartTemporalFreezeCooldown(pTemporal->Owner, interval);
+
+		return TemporalFreezeFrame::Erase;
 	}
 
 	if (lethal)
@@ -2483,8 +2821,9 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 			pTargetExt->TemporalErasePending = false;
 		}
 
-		StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
-		ResetTemporalFreeze(record);
+		const int interval = record.Interval;
+		EraseTemporalFreeze(this->TemporalFreezes, pRecord);
+		StartTemporalFreezeCooldown(pTemporal->Owner, interval);
 
 		return TemporalFreezeFrame::Erase;
 	}
@@ -2498,23 +2837,26 @@ TemporalFreezeFrame TechnoExt::UpdateTemporalFreeze(TemporalClass* pTemporal, Te
 		{
 			pTargetExt->TemporalLingerSaved = false;
 			pTargetExt->TemporalErasePending = false;
-			StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
-			ResetTemporalFreeze(record);
+
+			const int interval = record.Interval;
+			EraseTemporalFreeze(this->TemporalFreezes, pRecord);
+			StartTemporalFreezeCooldown(pTemporal->Owner, interval);
 
 			return TemporalFreezeFrame::Erase;
 		}
 
-		ResetTemporalFreeze(record);
+		const int interval = record.Interval;
+		EraseTemporalFreeze(this->TemporalFreezes, pRecord);
 
 		if (pTemporal->Target == pTarget)
 		{
 			// Hand the target back exactly the way the engine's own life timer expiry does
-			// (LetGo, then straight out of Update). This runs after the record is cleared, so
+			// (LetGo, then straight out of Update). This runs after the record is gone, so
 			// the LetGo hook below does not settle the freeze a second time.
 			pTemporal->LetGo();
 		}
 
-		StartTemporalFreezeCooldown(pTemporal->Owner, record.Interval);
+		StartTemporalFreezeCooldown(pTemporal->Owner, interval);
 
 		return TemporalFreezeFrame::KeepAlive;
 	}
@@ -2540,6 +2882,8 @@ bool TemporalFreezeInstance::Serialize(T& stm)
 		.Process(this->TargetID)
 		.Process(this->Duration)
 		.Process(this->Interval)
+		.Process(this->EraseAt)
+		.Process(this->EraseFrame)
 		.Process(this->TickRof)
 		.Process(this->Total)
 		.Process(this->Paid)

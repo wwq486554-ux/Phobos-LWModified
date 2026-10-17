@@ -878,6 +878,47 @@ bool TechnoTypeExt::HasSelectionGroupID(ObjectTypeClass* pType, const char* pID)
 	return (_strcmpi(id, pID) == 0);
 }
 
+bool TechnoTypeExt::HasExtraWeapons() const
+{
+	return this->ExtraWeapon_Configured;
+}
+
+const std::vector<WeaponTypeClass*>& TechnoTypeExt::GetFlatExtraWeaponList(bool elite) const
+{
+	return elite && !this->ExtraWeapon_Elite.empty() ? this->ExtraWeapon_Elite : this->ExtraWeapon;
+}
+
+const std::vector<WeaponTypeClass*>& TechnoTypeExt::GetExtraWeaponGroup(int slot, bool elite) const
+{
+	static const std::vector<WeaponTypeClass*> empty;
+
+	if (slot < 0 || static_cast<size_t>(slot) >= this->ExtraWeapon_Groups.size())
+		return empty;
+
+	if (elite && static_cast<size_t>(slot) < this->ExtraWeapon_EliteGroups.size()
+		&& !this->ExtraWeapon_EliteGroups[slot].empty())
+	{
+		return this->ExtraWeapon_EliteGroups[slot];
+	}
+
+	return this->ExtraWeapon_Groups[slot];
+}
+
+bool TechnoTypeExt::HasExtraWeaponGroupForSlot(int slot, bool elite) const
+{
+	return !this->GetExtraWeaponGroup(slot, elite).empty();
+}
+
+const std::vector<CoordStruct>& TechnoTypeExt::GetExtraWeaponGroupFLHs(int slot) const
+{
+	static const std::vector<CoordStruct> empty;
+
+	if (slot < 0 || static_cast<size_t>(slot) >= this->ExtraWeapon_GroupFLHs.size())
+		return empty;
+
+	return this->ExtraWeapon_GroupFLHs[slot];
+}
+
 void TechnoTypeExt::ParseBurstFLHs(INI_EX& exArtINI, const char* pArtSection,
 	std::vector<std::vector<CoordStruct>>& nFLH, std::vector<std::vector<CoordStruct>>& nEFlh, const char* pPrefixTag)
 {
@@ -1619,6 +1660,77 @@ void TechnoTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->SuppressKillWeapons.Read(exINI, pSection, "SuppressKillWeapons");
 	this->SuppressKillWeapons_Types.Read(exINI, pSection, "SuppressKillWeapons.Types");
 
+	// --- ExtraWeapon mount lists ---
+	this->ExtraWeapon.Read(exINI, pSection, "ExtraWeapon");
+	this->ExtraWeapon_Elite.Read(exINI, pSection, "ExtraWeapon.Elite");
+
+	if (this->ExtraWeapon.size() > ExtraWeapon_MaxMounts)
+		this->ExtraWeapon.resize(ExtraWeapon_MaxMounts);
+
+	if (this->ExtraWeapon_Elite.size() > ExtraWeapon_MaxMounts)
+		this->ExtraWeapon_Elite.resize(ExtraWeapon_MaxMounts);
+
+	this->ExtraWeapon_Groups.clear();
+	this->ExtraWeapon_Groups.resize(ExtraWeapon_MaxMounts);
+	this->ExtraWeapon_EliteGroups.clear();
+	this->ExtraWeapon_EliteGroups.resize(ExtraWeapon_MaxMounts);
+
+	for (int slot = 0; slot < static_cast<int>(ExtraWeapon_MaxMounts); ++slot)
+	{
+		char groupKey[48];
+
+		if (slot == 0)
+			strcpy_s(groupKey, "ExtraWeapon.Primary");
+		else if (slot == 1)
+			strcpy_s(groupKey, "ExtraWeapon.Secondary");
+		else
+			_snprintf_s(groupKey, sizeof(groupKey), "ExtraWeapon.Weapon%d", slot + 1);
+
+		this->ExtraWeapon_Groups[slot].Read(exINI, pSection, groupKey);
+
+		if (slot == 0)
+			strcpy_s(groupKey, "ExtraWeapon.ElitePrimary");
+		else if (slot == 1)
+			strcpy_s(groupKey, "ExtraWeapon.EliteSecondary");
+		else
+			_snprintf_s(groupKey, sizeof(groupKey), "ExtraWeapon.EliteWeapon%d", slot + 1);
+
+		this->ExtraWeapon_EliteGroups[slot].Read(exINI, pSection, groupKey);
+
+		if (this->ExtraWeapon_Groups[slot].size() > ExtraWeapon_MaxMounts)
+			this->ExtraWeapon_Groups[slot].resize(ExtraWeapon_MaxMounts);
+
+		if (this->ExtraWeapon_EliteGroups[slot].size() > ExtraWeapon_MaxMounts)
+			this->ExtraWeapon_EliteGroups[slot].resize(ExtraWeapon_MaxMounts);
+	}
+
+	// Cache the per-frame early-out answer.
+	this->ExtraWeapon_Configured = !this->ExtraWeapon.empty() || !this->ExtraWeapon_Elite.empty();
+
+	if (!this->ExtraWeapon_Configured)
+	{
+		for (const auto& group : this->ExtraWeapon_Groups)
+		{
+			if (!group.empty())
+			{
+				this->ExtraWeapon_Configured = true;
+				break;
+			}
+		}
+	}
+
+	if (!this->ExtraWeapon_Configured)
+	{
+		for (const auto& group : this->ExtraWeapon_EliteGroups)
+		{
+			if (!group.empty())
+			{
+				this->ExtraWeapon_Configured = true;
+				break;
+			}
+		}
+	}
+
 	this->Promote_VeteranAnimation.Read(exINI, pSection, "Promote.VeteranAnimation");
 	this->Promote_EliteAnimation.Read(exINI, pSection, "Promote.EliteAnimation");
 
@@ -1841,6 +1953,56 @@ void TechnoTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	}
 
 	this->ParseBurstFLHs(exArtINI, pArtSection, this->WeaponBurstFLHs, this->EliteWeaponBurstFLHs, "");
+
+	// --- ExtraWeapon mount FLHs ---
+	// One key per mount of each list; an unset key means 0,0,0 (the unit's centre).
+	this->ExtraWeapon_FLHs.clear();
+
+	if (!this->ExtraWeapon.empty() || !this->ExtraWeapon_Elite.empty())
+	{
+		this->ExtraWeapon_FLHs.assign(ExtraWeapon_MaxMounts, CoordStruct::Empty);
+
+		for (size_t mount = 0; mount < ExtraWeapon_MaxMounts; ++mount)
+		{
+			Nullable<CoordStruct> flh;
+			_snprintf_s(tempBuffer, sizeof(tempBuffer), "ExtraWeaponFLH%d", static_cast<int>(mount + 1));
+			flh.Read(exArtINI, pArtSection, tempBuffer);
+
+			if (flh.isset())
+				this->ExtraWeapon_FLHs[mount] = flh.Get();
+		}
+	}
+
+	this->ExtraWeapon_GroupFLHs.clear();
+	this->ExtraWeapon_GroupFLHs.resize(ExtraWeapon_MaxMounts);
+
+	for (size_t slot = 0; slot < ExtraWeapon_MaxMounts; ++slot)
+	{
+		auto& flhs = this->ExtraWeapon_GroupFLHs[slot];
+
+		if (this->ExtraWeapon_Groups[slot].empty() && this->ExtraWeapon_EliteGroups[slot].empty())
+			continue;
+
+		flhs.assign(ExtraWeapon_MaxMounts, CoordStruct::Empty);
+
+		for (size_t mount = 0; mount < ExtraWeapon_MaxMounts; ++mount)
+		{
+			char flhKey[48];
+
+			if (slot == 0)
+				_snprintf_s(flhKey, sizeof(flhKey), "ExtraWeapon.PrimaryFLH%d", static_cast<int>(mount + 1));
+			else if (slot == 1)
+				_snprintf_s(flhKey, sizeof(flhKey), "ExtraWeapon.SecondaryFLH%d", static_cast<int>(mount + 1));
+			else
+				_snprintf_s(flhKey, sizeof(flhKey), "ExtraWeapon.Weapon%dFLH%d", static_cast<int>(slot + 1), static_cast<int>(mount + 1));
+
+			Nullable<CoordStruct> flh;
+			flh.Read(exArtINI, pArtSection, flhKey);
+
+			if (flh.isset())
+				flhs[mount] = flh.Get();
+		}
+	}
 
 	this->AlternateFLH_OnTurret.Read(exArtINI, pArtSection, "AlternateFLH.OnTurret");
 	this->AlternateFLH_ApplyVehicle.Read(exArtINI, pArtSection, "AlternateFLH.ApplyVehicle");
@@ -2335,6 +2497,13 @@ void TechnoTypeExt::Serialize(T& Stm)
 		.Process(this->Convert_Health_AbovePercent)
 		.Process(this->Convert_Health_BelowPercent)
 		.Process(this->Convert_Health)
+
+		.Process(this->ExtraWeapon)
+		.Process(this->ExtraWeapon_Elite)
+		.Process(this->ExtraWeapon_FLHs)
+		.Process(this->ExtraWeapon_Groups)
+		.Process(this->ExtraWeapon_EliteGroups)
+		.Process(this->ExtraWeapon_GroupFLHs)
 		;
 }
 void TechnoTypeExt::LoadFromStream(PhobosStreamReader& Stm)

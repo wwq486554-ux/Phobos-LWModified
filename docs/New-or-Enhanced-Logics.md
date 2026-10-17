@@ -5471,3 +5471,50 @@ Carryall.Allowed=yes         ; boolean, optional - overrides the Organic/NonVehi
 - The pick-up and the drop are currently driven entirely by the local machine; the cross-machine event for them is not wired up yet, so in a network game only the machine that issues the order performs the sequence. Single player is unaffected.
 - Saving the game while a vehicle is being carried is not supported: the carried state is not restored on load.
 ```
+
+### Extra weapons
+
+- Adds additional weapons to a techno that fire independently of the engine-driven ones: every mount fires at the techno's current target on its own weapon's `ROF`, `Burst`, projectile, damage and range, without touching the engine's weapon slots, ammo, rearm timers, firing animations or voice lines.
+  - The extra weapons never acquire targets themselves. The target and the firing context both come from the engine: the active mount list is chosen every frame by the weapon slot the engine's own `SelectWeapon` picks for the current target, the same function `BodyWeapon` uses, so an extra mount list naturally follows the unit's AA/secondary/gattling/IFV weapon selection.
+  - A slot that has a group list of its own fires only that group. A slot without one falls back to the suffix-less list. A slot with neither fires nothing. A type that sets no group at all therefore uses the suffix-less list on every slot.
+  - An unset elite variant falls back to the normal list of the same group, so elite units are not left silent.
+- Every mount keeps its own cooldown and burst state. They are paused - not reset - while the unit has no valid target, the target is outside the mount's own range, the mount's group is not active or a unit-level gate fails, so an interrupted burst resumes where it stopped and only the last shot of a burst starts the reload.
+- Range is decided by the extra weapon's own `Range` through the usual range modifiers, with `AirRangeBonus` added for air targets and `MinimumRange` checked as well. The engine weapon's range only decides which target the engine acquires, so an extra weapon with a longer range can already fire at a target the unit is still closing on, while a shorter-ranged one waits until the target comes closer.
+- Unit-level gates: `InLimbo`, `Deactivated`/EMP, `AttachEffect` weapon disable, a passenger of an open-topped transport (on itself, fixed v1 limitation), and a building that is selling or still under construction.
+- Cloaking follows the extra weapon's own `DecloakToFire`: a cloaked unit decloaks on the frame the shot becomes possible and fires on the next one, and stays cloaked when the weapon has `DecloakToFire=no`.
+- `Burst` uses the weapon-level keys that already exist: `Burst`, `Burst.Delays` and `Burst.NoDelay`. The first shot is immediate, every later shot waits at least one frame, and a weapon without `Burst.Delays` uses the engine's own 3-5 frame random with the synchronised RNG. `Burst.FireWithinSequence` does not apply because the extra shot never runs a firing sequence.
+- `ROF` is the extra weapon's own `ROF` with the usual veterancy, house and `AttachEffect` ROF multipliers; the engine's 0-2 frame random delay is deliberately not added so the pace stays predictable.
+- Every shot is a real projectile: it gets its own muzzle animation, report sound, laser/bolt/beam/particle effect, warhead, armour and `CellSpread` handling and experience. Damage uses the weapon's `Damage` times the unit's current firepower multiplier. Ammo is not consumed, and the engine's own firing events are not raised, so no firing animation, recoil, voice line or `DiscardOn.Firing` attached effect runs for it.
+- The muzzle follows the unit's current turret facing (`HasTurret()`), and the extra weapon never requests a turn of its own. A `Turret=yes` unit therefore fires from its turret and a `BodyWeapon`-locked slot fires along the hull automatically, with no special configuration.
+- Weapons the engine special-cases inside its firing path and that a self-built projectile cannot reproduce - `Spawner`, `DiskLaser`, `IsSonic`, `LimboLaunch`, `Suicide` and `IsMagBeam` - are skipped safely: `debug.log` receives one developer warning per mount and the remaining mounts keep firing.
+- The feature is driven from the existing `TechnoClass::AI` hook, so it adds no new hook addresses, and a type with no `ExtraWeapon` keys costs one cached flag check per frame. The cooldown and burst state of every mount are saved and loaded.
+
+In `rulesmd.ini`:
+```ini
+[SOMETECHNO]                       ; TechnoType
+ExtraWeapon=                       ; List of WeaponTypes - suffix-less mount list
+ExtraWeapon.Elite=                 ; List of WeaponTypes - elite mount list, unset = use the normal one
+ExtraWeapon.Primary=               ; List of WeaponTypes - mounts that fire while engine weapon slot 0 is selected
+ExtraWeapon.Secondary=             ; List of WeaponTypes - mounts that fire while engine weapon slot 1 is selected
+ExtraWeapon.WeaponX=               ; List of WeaponTypes - engine weapon slot X-1 for X >= 3 (multi-weapon slots)
+ExtraWeapon.ElitePrimary=          ; List of WeaponTypes - elite variants of the groups above
+ExtraWeapon.EliteSecondary=
+ExtraWeapon.EliteWeaponX=
+```
+
+In `artmd.ini`:
+```ini
+[SOMETECHNO]                       ; TechnoType Image
+ExtraWeaponFLH1=0,0,0              ; integer - Forward,Lateral,Height - suffix-less list mount N, N = 1..18
+ExtraWeapon.PrimaryFLH1=0,0,0      ; group mount points, keyed by the same group name as in rulesmd.ini
+ExtraWeapon.SecondaryFLH1=0,0,0
+ExtraWeapon.WeaponXFLH1=0,0,0
+```
+
+```{note}
+- Every list holds at most 18 mounts, matching `TechnoTypeClass::MaxWeapons`. The normal and elite lists are matched by mount position, and a position a shorter list does not have simply does not fire.
+- The `FLH` keys are shared between the normal and elite lists: a mount is a place on the unit, not a property of a weapon.
+- A `WeaponTypes` ID that does not resolve still allocates an empty weapon type. Such a mount, and a mount whose weapon has no usable projectile, is skipped with a developer warning instead of stopping the mounts after it.
+- Target type filtering is not part of this feature on purpose: the extra weapons fire at whatever the unit's target is. To make them depend on the target category, bind the groups to weapon slots and use the existing `ForceWeapon.*` keys on the type to force a slot for a target category. The engine weapon in the forced slot still fires, so put a weapon there that belongs on the unit in that situation.
+```
+

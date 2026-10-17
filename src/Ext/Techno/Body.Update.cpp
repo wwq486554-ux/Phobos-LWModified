@@ -24,6 +24,7 @@ void TechnoExt::OnEarlyUpdate()
 	this->UpdateLastTargetCrd();
 	// First line of defence is the container being empty, see UpdateSweepFire.
 	this->UpdateSweepFire();
+	this->UpdateExtraWeapons();
 
 	if (this->CheckDeathConditions())
 		return;

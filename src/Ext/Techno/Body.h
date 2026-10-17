@@ -118,6 +118,29 @@ private:
 	bool Serialize(T& stm);
 };
 
+// Per-mount state of one ExtraWeapon list. Each mount keeps its own cooldown and burst
+// state, so the mounts fire on their own schedules; a paused mount (no target, out of its
+// own range, unit-level gate, different group active) keeps that state untouched, which is
+// the vanilla burst behaviour: the round in progress is resumed, not restarted.
+struct ExtraWeaponRuntime
+{
+	WeaponTypeClass* Weapon { nullptr }; // Weapon this mount currently holds, for change detection
+	CDTimerClass Cooldown {};            // Frames until the next round may start
+	CDTimerClass BurstTimer {};          // Frames until the next shot of the current burst
+	int BurstShotsLeft { 0 };            // Shots still owed by the current burst
+	int NextShotIndex { 0 };             // Burst index of the next shot (delay/mirroring)
+	// Transient diagnostic flag, not serialized: an unresolvable weapon ID leaves an empty
+	// shell behind and the engine-special weapon kinds are skipped, and this keeps the log
+	// warning to one per mount instead of every frame.
+	bool SkippedLogged { false };
+	bool Load(PhobosStreamReader& Stm, bool RegisterForChange);
+	bool Save(PhobosStreamWriter& Stm) const;
+
+private:
+	template <typename T>
+	bool Serialize(T& Stm);
+};
+
 // Diagnostic instrumentation for the SweepFire mechanism. Development only: a game that does not
 // set SweepFire.ControlProbe=yes on some weapon writes no SweepFire probe to debug.log at all.
 // Even when switched on, every site keeps its own line budget, so a sweep cannot flood the log.
@@ -286,6 +309,14 @@ public:
 	std::vector<SweepFireInstance> Sweeps;
 	// Frames between the end of a sweep and the start of the next one.
 	CDTimerClass SweepFireCooldownTimer;
+
+	// --- ExtraWeapon ---
+	// Runtime state, one record per mount. The suffix-less list has a single outer slot
+	// (index 0), the grouped lists are indexed by engine weapon slot. Only the list that
+	// the engine's current weapon selection activates advances; the others keep their
+	// state so a group switch pauses a burst without cancelling it.
+	std::vector<std::vector<ExtraWeaponRuntime>> ExtraWeapon_FlatRuntimes;
+	std::vector<std::vector<ExtraWeaponRuntime>> ExtraWeapon_GroupRuntimes;
 
 	// --- Temporal.Duration ---
 	// The "one-shot freezes" this techno is currently applying, one record per victim: a
@@ -472,6 +503,8 @@ public:
 		, ROFCurveLastFrame { 0 }
 		, MakeupDisguise { nullptr }
 		, MakeupHouse { nullptr }
+		, ExtraWeapon_FlatRuntimes {}
+		, ExtraWeapon_GroupRuntimes {}
 	{ }
 
 	void OnEarlyUpdate();
@@ -537,6 +570,23 @@ public:
 	// Keeps the infantry firing sequence looping for as long as a sweep runs
 	// (SweepFire.InfantryFireAnim). No effect on other technos.
 	void UpdateInfantrySweepAnim(int weaponIndex);
+
+	// --- ExtraWeapon ---
+	// Advances every active mount of this techno's extra weapons by one frame.
+	void UpdateExtraWeapons();
+	// Resizes/reinitialises the mount states to match the currently active list. Only a
+	// weapon change on a mount resets it - a paused list keeps its state.
+	void SyncExtraWeaponRuntimes(const std::vector<WeaponTypeClass*>& mounts, std::vector<ExtraWeaponRuntime>& runtimes);
+	// Unit-level gates shared by all extra weapons (limbo, EMP/deactivation, disabled
+	// weapons, open-topped transport passengers, selling/constructing buildings).
+	bool CanExtraWeaponsFire() const;
+	// Range test with the extra weapon's own effective range; the engine weapon's range
+	// only decides which target the engine acquires.
+	bool IsInExtraWeaponRange(WeaponTypeClass* pWeapon, AbstractClass* pTarget) const;
+	// Effective rearm delay of an extra weapon, including veteran/house/AE ROF modifiers.
+	int GetExtraWeaponROF(WeaponTypeClass* pWeapon) const;
+	// Builds and launches one real bullet of the extra weapon from the given FLH.
+	bool FireExtraWeaponShot(WeaponTypeClass* pWeapon, AbstractClass* pTarget, const CoordStruct& flh, int burstIndex, int burstCount);
 
 	// --- ROF curve, shared primitives ---
 	// The curve itself, and the hook that applies it to an ordinary weapon's reload, live in

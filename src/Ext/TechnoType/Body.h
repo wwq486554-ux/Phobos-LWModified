@@ -462,6 +462,31 @@ public:
 	SpecialActionData SpecialAction {};
 	SpecialActionData EliteSpecialAction {};
 
+	// --- ExtraWeapon ---
+	// Additional independent weapons: every mount fires at the techno's current target on
+	// its own weapon's ROF/burst/range, independently of the engine-driven weapon. The
+	// extra weapons do not acquire targets themselves; the mount list is selected each
+	// frame by the weapon slot the engine currently has selected (SelectWeapon), so the
+	// firing context (AA/secondary/gattling stage/IFV mode) comes from the vanilla weapons.
+	//
+	// Selection rule: a slot that has its own group list fires only that group; a slot
+	// without one falls back to the suffix-less list. An unset elite variant falls back to
+	// the normal list of the same group.
+	static constexpr size_t ExtraWeapon_MaxMounts = 18; // matches TechnoTypeClass::MaxWeapons
+	ValueableVector<WeaponTypeClass*> ExtraWeapon;       // rules: ExtraWeapon
+	ValueableVector<WeaponTypeClass*> ExtraWeapon_Elite; // rules: ExtraWeapon.Elite
+	std::vector<CoordStruct> ExtraWeapon_FLHs;           // art: ExtraWeaponFLH1..18, index 0 = mount 1
+	// Outer index = engine weapon slot (0..17): Primary = slot 0, Secondary = slot 1,
+	// WeaponX = slot X-1 for X >= 3. Groups left empty by the INI do not exist.
+	std::vector<ValueableVector<WeaponTypeClass*>> ExtraWeapon_Groups;
+	std::vector<ValueableVector<WeaponTypeClass*>> ExtraWeapon_EliteGroups;
+	// [slot][mount] FLHs of the group lists. Empty for slots without a group.
+	std::vector<std::vector<CoordStruct>> ExtraWeapon_GroupFLHs;
+	// Cached "any mount list is configured" answer, so the per-frame update of every techno
+	// in the game can early-out on a single flag instead of scanning the lists. Recomputed
+	// by LoadFromINIFile for every type; deliberately not serialized.
+	bool ExtraWeapon_Configured;
+
 	TechnoTypeExt(TechnoTypeClass* OwnerObject) : ObjectTypeExt(OwnerObject)
 		, HealthBar_Hide { false }
 		, HealthBar_HidePips { false }
@@ -854,6 +879,14 @@ public:
 		, Convert_Health_AbovePercent { -1.0 }
 		, Convert_Health_BelowPercent { -1.0 }
 		, Convert_Health {}
+
+		, ExtraWeapon {}
+		, ExtraWeapon_Elite {}
+		, ExtraWeapon_FLHs {}
+		, ExtraWeapon_Groups(ExtraWeapon_MaxMounts)
+		, ExtraWeapon_EliteGroups(ExtraWeapon_MaxMounts)
+		, ExtraWeapon_GroupFLHs(ExtraWeapon_MaxMounts)
+		, ExtraWeapon_Configured { false }
 	{ }
 
 	virtual ~TechnoTypeExt() = default;
@@ -869,6 +902,19 @@ public:
 
 	int SelectForceWeapon(TechnoClass* pThis, AbstractClass* pTarget) const;
 	int SelectMultiWeapon(TechnoClass* const pThis, AbstractClass* const pTarget) const;
+
+	// --- ExtraWeapon selection helpers (see the fields above) ---
+	// True when this type configures at least one extra-weapon mount list.
+	bool HasExtraWeapons() const;
+	// True when the given engine weapon slot has its own non-empty group list (elite list
+	// first, normal one as the fallback).
+	bool HasExtraWeaponGroupForSlot(int slot, bool elite) const;
+	// Suffix-less list, elite variant when it exists and the techno is elite.
+	const std::vector<WeaponTypeClass*>& GetFlatExtraWeaponList(bool elite) const;
+	// Group list of an engine weapon slot, elite variant first.
+	const std::vector<WeaponTypeClass*>& GetExtraWeaponGroup(int slot, bool elite) const;
+	// Art FLHs that belong to the same group as GetExtraWeaponGroup.
+	const std::vector<CoordStruct>& GetExtraWeaponGroupFLHs(int slot) const;
 
 	void UpdateAdditionalAttributes();
 

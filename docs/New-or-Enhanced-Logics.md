@@ -5468,6 +5468,40 @@ BallisticScatter.Max=2.0
 ; Trajectory.Missile.UniqueCurve=yes also honours the offset keys
 ```
 
+### Spawned missile scatter
+
+- Spawned missiles (AircraftTypes with `MissileSpawn=yes`, such as the V3 / V2 rockets, the Dreadnought's `DMISL` and the Carrier's `CMISL`, and Ares custom missiles) can now be scattered: the missile deliberately flies to a point offset from the target centre, so the warhead goes off where the missile lands instead of exactly on the target.
+  - The offset is drawn once, at the moment of launch, and stays fixed for that missile. The aim point still follows the target, so a moving target is still tracked - the missile flies to `target centre + offset`.
+  - Unlike the projectile scatter, the missile truly flies off-target: the aim point is written into the rocket locomotor's own moving destination, the field its per-frame steering step and its arrival test actually read, so the engine's own landing payload explodes at the offset point and the animation, smoke, damage cell and visuals all agree.
+  - The interval and its shaping are the same recipe as the universal scatter keys. `Missile.Scatter.Min` / `Missile.Scatter.Max` are a radius interval in cells (floating point), scaled by distance with the same `(distance / range) ^ (1 / Divergence)` ramp; `range` is the `Range` of the spawner's `Spawner=yes` weapon (the launcher's own range, falling back to the launch distance when no such weapon is found). `Missile.Scatter.Sigma` and `Missile.Scatter.Aspect` reshape the drawn radius and the circle exactly like the projectile keys, and `Missile.Scatter.Divergence` overrides the global `[General] Divergence`.
+  - `Missile.Scatter=yes` is the switch. A missile type that does not write it, or whose resolved interval is zero (`Min=Max=0`, or a point-blank launch whose distance ramp gives zero), is untouched bit for bit: no random number is drawn, no state is written and no destination is changed.
+  - Anti-air is the exception: against an air target the missile keeps homing to the target centre so the proximity fuze still works, and only the detonation coordinates of the air burst are displaced by the offset. A missile without `Missile.Homing` therefore sees no scatter against air targets at all - it has no air-burst path to move.
+  - Buildings take part like ground targets: they do not participate in `Missile.Homing`, so the physical offset is applied by the scatter update itself.
+  - `Missile.Scatter` works with or without `Missile.Homing`:
+    - with homing, the offset is added to the predicted intercept point every frame;
+    - without homing, the offset is applied to the target centre directly;
+    - when the target dies, becomes cloaked or is removed, the missile flies to the last aim point - which already includes the offset - and detonates there.
+  - `Missile.LazyCurve=yes` missiles such as the vanilla V3 rocket turn only very slowly, so their scatter is a landing-point level offset; treat sub-cell precision as not meaningful there. Cruise-type missiles (`Missile.LazyCurve=no`) are steered to the offset point.
+  - The offset is drawn with the scenario's synchronized random number generator on the launch frame and is saved with the missile, so both clients draw the same offset and loading a save does not re-roll it.
+  - No new hook address is added: the feature runs from existing hooks.
+
+In `rulesmd.ini`:
+```ini
+[SOMEMISSILE]                    ; AircraftType, spawned missile (MissileSpawn=yes)
+Missile.Scatter=no               ; boolean - enables the scatter
+Missile.Scatter.Min=0            ; floating point, radius lower bound in cells (negative values become 0)
+Missile.Scatter.Max=1.5          ; floating point, radius upper bound in cells (swapped if it is below Min)
+Missile.Scatter.Sigma=1.0        ; floating point, radius distribution exponent, clamped to [0.5, 16]
+Missile.Scatter.Aspect=1.0       ; floating point, area-conserving ellipse ratio, clamped to [0.125, 8]
+Missile.Scatter.Divergence=0.5   ; floating point, distance ramp exponent, lower bound 0.05; unset uses [General] Divergence
+```
+
+```{note}
+- The keys are written in the missile's own AircraftType section, not on the launcher's weapon, and they only apply to `MissileSpawn=yes` types.
+- Scatter follows the target and composes with every existing `Missile.Homing` behaviour; a missile type that does not enable it keeps its old flight path bit for bit.
+- The added type-level keys and per-missile save fields make saves from before this feature incompatible; start a new game after updating.
+```
+
 ### Carryall (jumpjet vehicles lifting other vehicles)
 
 - A vehicle produced by a war factory can act as a carryall: pick another vehicle up, carry it slung underneath while flying, and put it down somewhere else. Vanilla's carryall only exists on the aircraft production line - `[AircraftType] Carryall=` with the aircraft code paths behind it - so this is a second, independent implementation for `[VehicleType]`, and the aircraft carryall keeps working exactly as it did.

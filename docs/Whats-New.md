@@ -466,6 +466,11 @@ HideShakeEffects=false           ; boolean
   - `[General] Divergence` sets the global default for `Divergence`; a projectile that does not set its own value uses it.
   - Vanilla `ROT` / `Arm` missiles are scattered through their burst point as well. The engine steers them onto the target centre, so their `BallisticScatter.Min/Max` used to be a dead key; writing the interval is all it takes to enable it now, and the projectile body still flies to the centre.
   - `Trajectory=Missile` no longer loses its scatter - or a fixed `Trajectory.OffsetCoord` - to the pre-detonation snap, so `Trajectory.TargetSnapDistance` does not have to be `0` any more, and `Trajectory.Missile.UniqueCurve=yes` now honours the same offset keys.
+- [Spawned missile scatter](New-or-Enhanced-Logics.md#spawned-missile-scatter) (by laowang)
+  - `MissileSpawn=yes` missiles (the V3 / V2 rockets, the Dreadnought's and Carrier's missiles, and Ares custom missiles) can now fly deliberately off-target. `Missile.Scatter=yes` draws a fixed offset once at launch, the missile flies to `target centre + offset`, and the engine's own landing payload therefore goes off at the offset point - animation, smoke, damage cell and visuals all follow.
+  - `Missile.Scatter.Min/Max`, `.Sigma`, `.Aspect` and `.Divergence` use the same recipe and shaping as the projectile scatter keys; a missile without the keys is unchanged bit for bit, and `Min=Max=0` keeps the vanilla behaviour.
+  - The offset follows the target and works with or without `Missile.Homing`; against air targets only the air-burst coordinates are displaced, so the proximity fuze keeps working. `LazyCurve=yes` rockets get a landing-point level offset only.
+  - No new hook address; the offset is drawn with the synchronized RNG on the launch frame and saved, so it stays consistent between clients and across a save-load.
 - [Allow using waypoints, area guard and attack move with aircraft](Fixed-or-Improved-Logics.md#extended-aircraft-missions) (by CrimRecya)
 - [Advanced Aircraft Missions: loiter on arrival and boosted manual return](Fixed-or-Improved-Logics.md#advanced-aircraft-missions)
   - Aircraft loiter over their destination instead of returning to base, with a configurable radius, and can orbit the last known position of a destroyed target.

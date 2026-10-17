@@ -7,6 +7,7 @@
 #include <Ext/SWType/Body.h>
 #include <Ext/Aircraft/Body.h>
 #include <Ext/Aircraft/AdvancedMissions.h>
+#include <Ext/Unit/Carryall.h>
 
 #include <New/Entity/AttachEffectClass.h>
 #include <Utilities/EnumFunctions.h>
@@ -1239,6 +1240,32 @@ namespace SpecialAction
 		StartCooldown(pTechno, GetData(pTechno));
 	}
 
+	// The drop itself is driven by the carryall state machine from the engine order this
+	// issues, on every machine; the press only produces that order locally.
+	bool ExecuteDropPayload(TechnoClass* pTechno, const SpecialActionData& data)
+	{
+		// Nothing to put down. The payload is what makes the action meaningful, so
+		// this reports "not ready" instead of silently doing nothing.
+		if (!Carryall::IsCarrying(pTechno))
+		{
+			Debug::Log("[SpecialAction] unit %d: DropPayload ability did nothing (nothing carried)\n",
+				pTechno->Fetch_ID());
+
+			PlayNotReadyFeedback(pTechno, data);
+			return false;
+		}
+
+		if (!Carryall::IssueDropOrder(specific_cast<UnitClass*>(pTechno)))
+		{
+			Debug::Log("[SpecialAction] unit %d: DropPayload ability could not queue the order\n",
+				pTechno->Fetch_ID());
+
+			return false;
+		}
+
+		return true;
+	}
+
 	// The key press only validates and queues; the return itself is executed by the
 	// event responder on every machine.
 	bool ExecuteReturn(TechnoClass* pTechno, const SpecialActionData& data)
@@ -1327,6 +1354,10 @@ namespace SpecialAction
 
 		case SpecialActionType::Return:
 			executed = ExecuteReturn(pTechno, data);
+			break;
+
+		case SpecialActionType::DropPayload:
+			executed = ExecuteDropPayload(pTechno, data);
 			break;
 
 		default:

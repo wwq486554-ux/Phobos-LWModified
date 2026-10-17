@@ -69,6 +69,7 @@ namespace
 		{ "superweapon", "SuperWeapon", SpecialActionType::SuperWeapon },
 		{ "attacheffect", "AttachEffect", SpecialActionType::AttachEffect },
 		{ "return",      "Return",      SpecialActionType::Return },
+		{ "droppayload", "DropPayload", SpecialActionType::DropPayload },
 	};
 
 	SpecialActionToken const* FindSpecialActionToken(const char* pName)

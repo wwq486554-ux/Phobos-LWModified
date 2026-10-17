@@ -91,9 +91,10 @@ DEFINE_HOOK(0x6FFBE0, TechnoClass_ClickedMission_SpecialActionCancel, 0x6)
 
 // NOTE on the size: an earlier version declared 3 here, because the instruction
 // at 0x6FFE00 (`sub esp,0x78`) really is 3 bytes long. That is not what the size
-// means. Syringe always patches max(size, 5) bytes with a 5-byte JMP, and its
-// trampoline resumes at hook+5, so a size below 5 is only safe when the bytes it
-// does not cover are NOPs. Here they were `push esi` and `push edi`: both were
+// means. Syringe always patches max(size, 5) bytes with a 5-byte JMP and the
+// trampoline that runs the saved instructions resumes at hook+size; with size = 3
+// the patch still clobbers 5 bytes, so resuming at hook+3 lands inside the JMP.
+// Here the bytes it did not cover were `push esi` and `push edi`: both were
 // overwritten by the JMP and skipped by the trampoline, leaving the stack frame
 // 8 bytes short. The function then returned to garbage - observed as an access
 // violation at EIP = 0, triggered by the first order that calls ClickedEvent

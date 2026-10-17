@@ -1,5 +1,9 @@
 #include "Body.h"
 
+#include <HouseClass.h>
+#include <LocomotionClass.h>
+#include <UnitClass.h>
+
 UnitTypeExt::ExtContainer UnitTypeExt::ExtMap;
 
 void UnitTypeExt::ApplyTurretOffsetUnit(Matrix3D* mtx, double factor, int turIdx)
@@ -11,6 +15,77 @@ void UnitTypeExt::ApplyTurretOffsetUnit(Matrix3D* mtx, double factor, int turIdx
 	const float z = static_cast<float>(offset->Z * factor);
 
 	mtx->Translate(x, y, z);
+}
+
+// =============================
+// carryall
+
+bool UnitTypeExt::IsCarryall() const
+{
+	return this->Carryall
+		&& this->OwnerObject()->Locomotor == LocomotionClass::CLSIDs::Jumpjet;
+}
+
+bool UnitTypeExt::CanBeCarried(TechnoClass* pTarget)
+{
+	// Vehicles only: infantry, buildings and aircraft are never carried.
+	const auto pUnit = specific_cast<UnitClass*>(pTarget);
+
+	// Nothing that is currently being eaten by a parasite can be picked up either.
+	if (!pUnit || pUnit->ParasiteEatingMe)
+		return false;
+
+	const auto pType = pUnit->Type;
+
+	// An explicit key overrides the global default below.
+	if (const auto pExt = UnitTypeExt::TryFetch(pType); pExt && pExt->Carryall_Allowed.isset())
+		return pExt->Carryall_Allowed.Get();
+
+	return !pType->Organic && !pType->NonVehicle;
+}
+
+bool UnitTypeExt::CanLift(TechnoClass* pCarrier, TechnoClass* pTarget)
+{
+	if (!pCarrier || !pTarget || pCarrier == pTarget || !CanBeCarried(pTarget))
+		return false;
+
+	// The carrier is a vehicle as well: only a unit type can carry the switch.
+	const auto pCarrierUnit = specific_cast<UnitClass*>(pCarrier);
+
+	if (!pCarrierUnit)
+		return false;
+
+	const auto pExt = UnitTypeExt::TryFetch(pCarrierUnit->Type);
+
+	if (!pExt || !pExt->IsCarryall())
+		return false;
+
+	// Size limit: unset or negative means the size is not checked at all. This is the
+	// Ares rule - the payload type's Size (a double) is compared against the carrier's
+	// limit - and the comparison is done in doubles so that a limit such as 1 accepts a
+	// payload whose Size is exactly 1.0.
+	if (pExt->Carryall_SizeLimit.isset())
+	{
+		const int limit = pExt->Carryall_SizeLimit.Get();
+
+		if (limit >= 0 && pTarget->GetTechnoType()->Size > static_cast<double>(limit))
+			return false;
+	}
+
+	// Which houses the carrier accepts. Neutral houses are a separate axis from
+	// own/allied/enemy, exactly as the vanilla carryall treats them.
+	const auto pPayloadHouse = pTarget->Owner;
+
+	if (pPayloadHouse->IsNeutral())
+		return pExt->Carryall_AffectsNeutral;
+
+	if (pPayloadHouse == pCarrier->Owner)
+		return pExt->Carryall_AffectsOwner;
+
+	if (pCarrier->Owner->IsAlliedWith(pPayloadHouse))
+		return pExt->Carryall_AffectsAllies;
+
+	return pExt->Carryall_AffectsEnemies;
 }
 
 // =============================
@@ -88,6 +163,14 @@ void UnitTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Deploy_NoPassenger.Read(exINI, pSection, "Deploy.NoPassenger");
 	this->Deploy_NoTiberium.Read(exINI, pSection, "Deploy.NoTiberium");
 	this->HoverDrownable.Read(exINI, pSection, "HoverDrownable");
+
+	this->Carryall.Read(exINI, pSection, "Carryall");
+	this->Carryall_SizeLimit.Read(exINI, pSection, "Carryall.SizeLimit");
+	this->Carryall_AffectsOwner.Read(exINI, pSection, "Carryall.AffectsOwner");
+	this->Carryall_AffectsAllies.Read(exINI, pSection, "Carryall.AffectsAllies");
+	this->Carryall_AffectsEnemies.Read(exINI, pSection, "Carryall.AffectsEnemies");
+	this->Carryall_AffectsNeutral.Read(exINI, pSection, "Carryall.AffectsNeutral");
+	this->Carryall_Allowed.Read(exINI, pSection, "Carryall.Allowed");
 
 	const auto pArtINI = &CCINIClass::INI_Art;
 	INI_EX exArtINI(pArtINI);
@@ -193,6 +276,13 @@ void UnitTypeExt::Serialize(T& Stm)
 		.Process(this->Deploy_NoPassenger)
 		.Process(this->Deploy_NoTiberium)
 		.Process(this->HoverDrownable)
+		.Process(this->Carryall)
+		.Process(this->Carryall_SizeLimit)
+		.Process(this->Carryall_AffectsOwner)
+		.Process(this->Carryall_AffectsAllies)
+		.Process(this->Carryall_AffectsEnemies)
+		.Process(this->Carryall_AffectsNeutral)
+		.Process(this->Carryall_Allowed)
 		.Process(this->TurretShape)
 		.Process(this->BarrelOverTurret)
 		.Process(this->BarrelOffset)

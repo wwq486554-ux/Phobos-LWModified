@@ -20,7 +20,8 @@ enum class SpecialActionType
 	Weapon,        // prep one of the unit's own slots for its next firing cycle
 	SuperWeapon,   // fire a chosen super weapon
 	AttachEffect,  // attach and/or strip AttachEffects on the unit itself
-	Return         // AdvancedAircraftMissions: fly home now, boosted while cruising home
+	Return,        // AdvancedAircraftMissions: fly home now, boosted while cruising home
+	DropPayload    // Carryall: put the carried vehicle down right here
 };
 
 // Where a SuperWeapon action aims. The engine's super weapon launch always takes

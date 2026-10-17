@@ -211,6 +211,8 @@
     <!-- src\Ext\Trigger -->
     <ClCompile Include="src\Ext\Trigger\Hooks.cpp" />
     <!-- src\Ext\Unit -->
+    <ClCompile Include="src\Ext\Unit\Carryall.cpp" />
+    <ClCompile Include="src\Ext\Unit\Hooks.Carryall.cpp" />
     <ClCompile Include="src\Ext\Unit\Hooks.Crushing.cpp" />
     <ClCompile Include="src\Ext\Unit\Hooks.DeployFire.cpp" />
     <ClCompile Include="src\Ext\Unit\Hooks.DeploysInto.cpp" />
@@ -355,6 +357,7 @@
     <ClInclude Include="src\Ext\AbstractType\Body.h" />
     <ClInclude Include="src\Ext\ObjectType\Body.h" />
     <ClInclude Include="src\Ext\Unit\Body.h" />
+    <ClInclude Include="src\Ext\Unit\Carryall.h" />
     <ClInclude Include="src\Ext\Infantry\Body.h" />
     <ClInclude Include="src\Ext\UnitType\Body.h" />
     <ClInclude Include="src\Ext\InfantryType\Body.h" />

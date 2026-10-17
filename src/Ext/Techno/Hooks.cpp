@@ -6,6 +6,7 @@
 #include <Ext/House/Body.h>
 #include <Ext/Scenario/Body.h>
 #include <Ext/Unit/Body.h>
+#include <Ext/Unit/Carryall.h>
 #include <Ext/Building/Body.h>
 #include <Ext/WeaponType/Body.h>
 #include <Ext/WarheadType/Body.h>
@@ -97,6 +98,13 @@ DEFINE_HOOK(0x736480, UnitClass_AI, 0x6)
 	pExt->DepletedAmmoActions();
 	pExt->UpdateSubterraneanHarvester();
 	pExt->UpdateRecoilData();
+
+	// Carryall: the state machine drives the whole pick-up/drop sequence from the
+	// engine's own order fields (Mission/Target), the same way on every machine. The
+	// payload side goes first: it also carries out the "my carrier died" rule, which has
+	// to happen before the carrier-side switch.
+	Carryall::UpdatePayload(pThis);
+	Carryall::Update(pThis);
 
 	// Replace vanilla animation counter code in UnitClass::AI.
 	if (pThis->IsAlive && !pExt->DelayedFireSequencePaused && !((pThis->IsWarpingIn() && pThis->TemporalTargetingMe) || pThis->IsBeingWarpedOut()))

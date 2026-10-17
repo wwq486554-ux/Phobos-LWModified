@@ -1,5 +1,6 @@
 #include "Body.h"
 #include <Ext/Infantry/Body.h>
+#include <Ext/Unit/Carryall.h>
 #include <Interop/TechnoExt.h>
 
 #include <InputManagerClass.h>
@@ -363,6 +364,19 @@ static Action __fastcall UnitClass__WhatAction_Wrapper(UnitClass* pThis, void* _
 	AresScheme::Prefix(pThis, pObj, -1, false);
 	auto const result = pThis->UnitClass::MouseOverObject(pObj, ignoreForce);
 	AresScheme::Suffix();
+
+	// Carryall: with the force-move key held over a vehicle this carrier may pick up,
+	// the cursor is the engine's own Tote cursor - the same one a vanilla carryall
+	// shows. Without the key nothing changes, and an ineligible target keeps the
+	// vanilla cursor so the order is visibly refused.
+	if (pObj
+		&& !ignoreForce
+		&& InputManagerClass::Instance->IsForceMoveKeyPressed()
+		&& Carryall::CanLiftNow(pThis, abstract_cast<TechnoClass*>(pObj)))
+	{
+		return Action::Tote;
+	}
+
 	return result;
 }
 DEFINE_FUNCTION_JUMP(VTABLE, 0x7F5CE4, UnitClass__WhatAction_Wrapper)

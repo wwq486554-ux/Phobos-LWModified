@@ -5428,3 +5428,46 @@ Divergence=0.6                  ; floating point value, distance ramp exponent, 
 ```{note}
 On the two `TechnoClass::Fire_At` paths Ares already draws the radius from the projectile's own `BallisticScatter.Min/Max`, because it hooks both sites. Phobos therefore only shapes that radius there, and remaps the engine's own draw only when Ares is not loaded. The interval a projectile configures is the same either way, and `Sigma`, `Aspect` and `Divergence` apply in both cases.
 ```
+
+### Carryall (jumpjet vehicles lifting other vehicles)
+
+- A vehicle produced by a war factory can act as a carryall: pick another vehicle up, carry it slung underneath while flying, and put it down somewhere else. Vanilla's carryall only exists on the aircraft production line - `[AircraftType] Carryall=` with the aircraft code paths behind it - so this is a second, independent implementation for `[VehicleType]`, and the aircraft carryall keeps working exactly as it did.
+- The carrier has to be a `VehicleType` with the Jumpjet locomotor and `Carryall=yes` on itself. `BalloonHover` is optional: a carrier with `BalloonHover=yes` hovers and never touches the ground, one without it lands like any other jumpjet vehicle, and both can carry and drop.
+- Picking up: hold the force-move key (`Alt` by default, whatever the player has bound it to) and click a vehicle the carrier is allowed to take. The cursor becomes the engine's own tote cursor while the key is held over such a vehicle. Without the key nothing changes at all, so an ordinary click keeps its vanilla meaning, and an ineligible target never shows the tote cursor.
+- The carrier flies onto the vehicle's own cell, comes all the way down to the ground there and only then attaches the vehicle; the grab therefore always happens in the cell the aircraft is in, and the carrier climbs back to its cruise altitude afterwards.
+- Both the descent and the climb are moved by the carrier itself, with the step capped by the Jumpjet's own `Climb` and accelerated up to it, so taking off and landing look like the aircraft's own vertical movement instead of a teleport. This works for `BalloonHover=yes` carriers too, which the engine would otherwise never let leave their hover.
+- The picked vehicle is not a passenger and is not left in the world either: while it is carried it is limboed - it is not drawn by the engine, not selectable, not targetable and runs no AI of its own. The carrier draws its model itself each frame, slung underneath (the engine's own carryall hang offset), which is what makes the carried vehicle look attached without being a clickable world object. Only one vehicle can be carried at a time; a carrier that is already carrying or already on its way to a target refuses further pick-up orders.
+- What may be picked up:
+  - the target has to be a vehicle; infantry, buildings and aircraft are never carried;
+  - a vehicle that is currently being eaten by a parasite is refused, and so is one that is already being carried or is carrying something itself;
+  - `Carryall.Allowed` on the target type overrides the default. Unset, anything that is neither `Organic` nor `NonVehicle` may be carried, which is the rule Ares uses for its own carryall;
+  - `Carryall.SizeLimit` on the carrier, when set to a non-negative value, caps the target's `Size`; unset or negative means the size is not checked;
+  - the four `Carryall.Affects*` keys on the carrier decide which houses' vehicles are acceptable. Their defaults reproduce the vanilla carryall rule: own and allied vehicles only.
+- Dropping: the `SpecialAction` key configured as `DropPayload`. The carrier comes down over the place it is hovering on and lets go of the vehicle there, so the payload is put down in the same cell the aircraft is in. If that cell cannot hold a vehicle - a building, water, a bridge, another occupant - the carrier first flies to the nearest cell where the vehicle does fit and drops it there instead; if no such cell exists at all it keeps holding the vehicle rather than putting it somewhere invalid. The released vehicle is put back into the world as a normal, controllable vehicle and left guarding where it was dropped. Deliberately not implemented: carrying infantry, airdropping the payload out of the air, and letting the vanilla `Unload` mission trigger a drop. Dropping has exactly one entry point, the `DropPayload` ability.
+- A carrier destroyed while carrying leaves its payload as a known limitation: the carried vehicle is limboed and its own logic does not run, so losing the carrier in mid-flight currently strands the payload instead of destroying it. Do not rely on carrying through the loss of the carrier yet.
+- While a sequence is running the carrier keeps its normal weapons, targeting and self-defence. The only restriction is that the vehicle it is carrying (or is on its way to collect) is never kept as its attack target, so an armed carrier cannot be made to shoot the friendly vehicle it was told to lift. A carrier that has `Deployer=yes` cannot deploy in the middle of a sequence - deploying would turn it into its ground form and lose the carried vehicle.
+
+In `rulesmd.ini`:
+```ini
+[SOMECARRIER]                ; VehicleType - a war factory vehicle with the Jumpjet locomotor
+Locomotor={92612C46-F71F-11d1-AC9F-006008055BB5}
+Carryall=yes                 ; boolean - this type is a carryall
+Carryall.SizeLimit=-1        ; integer - largest Size this carrier accepts, negative = no limit
+Carryall.AffectsOwner=yes    ; boolean - may pick up this carrier's own house's vehicles
+Carryall.AffectsAllies=yes   ; boolean - may pick up allied houses' vehicles
+Carryall.AffectsEnemies=no   ; boolean - may pick up enemy houses' vehicles
+Carryall.AffectsNeutral=no   ; boolean - may pick up neutral houses' vehicles
+SpecialAction=DropPayload    ; the only drop entry point
+BalloonHover=yes             ; boolean, optional - hover instead of landing
+
+[SOMEVEHICLE]                ; VehicleType - the vehicle that is to be carried
+Carryall.Allowed=yes         ; boolean, optional - overrides the Organic/NonVehicle default
+```
+
+```{note}
+- The force-move key is read at the moment of the click and at the moment the cursor is computed, so rebinding it in the game options is honoured and nothing depends on a fixed `Alt`.
+- The carried vehicle cannot be selected or given orders while it is carried - it exists only as the model the carrier draws. It becomes a normal vehicle again when it is put down.
+- A carrier is only recognised as such when its type is a `VehicleType`. An `AircraftType` with `Carryall=yes` is the vanilla carryall and is not affected by any of these keys.
+- The pick-up and the drop are currently driven entirely by the local machine; the cross-machine event for them is not wired up yet, so in a network game only the machine that issues the order performs the sequence. Single player is unaffected.
+- Saving the game while a vehicle is being carried is not supported: the carried state is not restored on load.
+```

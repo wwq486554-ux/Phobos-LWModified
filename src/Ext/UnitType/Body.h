@@ -73,6 +73,24 @@ public:
 	Valueable<bool> Deploy_NoTiberium;
 	Nullable<bool> HoverDrownable;
 
+	// --- Carryall (a jumpjet vehicle that lifts and carries other vehicles) ---
+	//
+	// Carrier side: this type can pick vehicles up. The switch alone is not enough,
+	// the type also has to use the Jumpjet locomotor - see IsCarryall().
+	Valueable<bool> Carryall;
+	// Payload limit compared against the target type's Size. Unset, or any negative
+	// value, means the size is not checked at all.
+	Nullable<int> Carryall_SizeLimit;
+	// Which houses' vehicles this carrier may pick up. The defaults reproduce the
+	// vanilla carryall rule: own and allied vehicles only.
+	Valueable<bool> Carryall_AffectsOwner;
+	Valueable<bool> Carryall_AffectsAllies;
+	Valueable<bool> Carryall_AffectsEnemies;
+	Valueable<bool> Carryall_AffectsNeutral;
+	// Payload side, read from the vehicle that is to be picked up. Unset falls back
+	// to "anything that is neither Organic nor NonVehicle".
+	Nullable<bool> Carryall_Allowed;
+
 	SHPStruct* TurretShape;
 
 	Nullable<bool> BarrelOverTurret;
@@ -94,6 +112,19 @@ public:
 		return weaponIndex >= 0 && !this->BodyWeapon.empty()
 			&& (this->BodyWeapon.Contains(-1) || this->BodyWeapon.Contains(weaponIndex));
 	}
+
+	// Whether this type is a carryall carrier: the per-type switch is on and the
+	// type moves with the Jumpjet locomotor.
+	bool IsCarryall() const;
+
+	// Payload side: may this object be picked up at all, leaving aside who asks and
+	// how heavy it is? Only vehicles qualify, and nothing that is currently being
+	// eaten by a parasite.
+	static bool CanBeCarried(TechnoClass* pTarget);
+
+	// The full pick-up check: the payload test above, the carrier's house switch and
+	// the carrier's size limit.
+	static bool CanLift(TechnoClass* pCarrier, TechnoClass* pTarget);
 
 	explicit UnitTypeExt(UnitTypeClass* const OwnerObject) : TechnoTypeExt(OwnerObject)
 		, SinkSpeed {}
@@ -147,6 +178,13 @@ public:
 		, Deploy_NoPassenger { false }
 		, Deploy_NoTiberium { false }
 		, HoverDrownable {}
+		, Carryall { false }
+		, Carryall_SizeLimit {}
+		, Carryall_AffectsOwner { true }
+		, Carryall_AffectsAllies { true }
+		, Carryall_AffectsEnemies { false }
+		, Carryall_AffectsNeutral { false }
+		, Carryall_Allowed {}
 		, TurretShape { nullptr }
 		, BarrelOverTurret { }
 		, BarrelOffset { 0 }

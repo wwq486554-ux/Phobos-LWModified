@@ -6,6 +6,8 @@
 
 #include <Utilities/Debug.h>
 
+#include <Ext/Rules/Body.h>
+
 AircraftTypeExt::ExtContainer AircraftTypeExt::ExtMap;
 
 namespace
@@ -134,6 +136,13 @@ void AircraftTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	this->Homing_FuzeRadius.Read(exINI, pSection, "Missile.Homing.FuzeRadius");
 	this->Homing_AbortDive.Read(exINI, pSection, "Missile.Homing.AbortDive");
 
+	this->Scatter_Enabled.Read(exINI, pSection, "Missile.Scatter");
+	this->Scatter_Min.Read(exINI, pSection, "Missile.Scatter.Min");
+	this->Scatter_Max.Read(exINI, pSection, "Missile.Scatter.Max");
+	this->Scatter_Sigma.Read(exINI, pSection, "Missile.Scatter.Sigma");
+	this->Scatter_Aspect.Read(exINI, pSection, "Missile.Scatter.Aspect");
+	this->Scatter_Divergence.Read(exINI, pSection, "Missile.Scatter.Divergence");
+
 	if (this->Missile_Homing)
 	{
 		// 对空引爆用的载荷: 同节 Ares 键 (Missile.Damage/EliteDamage/Warhead/EliteWarhead) 优先;
@@ -238,7 +247,24 @@ void AircraftTypeExt::Serialize(T& Stm)
 		.Process(this->Homing_MaxLeadTime)
 		.Process(this->Homing_FuzeRadius)
 		.Process(this->Homing_AbortDive)
+		// Missile.Scatter —— 子机导弹弹道散布 (6 个类型级键, 追加链尾)
+		.Process(this->Scatter_Enabled)
+		.Process(this->Scatter_Min)
+		.Process(this->Scatter_Max)
+		.Process(this->Scatter_Sigma)
+		.Process(this->Scatter_Aspect)
+		.Process(this->Scatter_Divergence)
 		;
+}
+
+bool AircraftTypeExt::IsMissileScatterEnabled() const
+{
+	return this->Scatter_Enabled.Get() && this->OwnerObject()->MissileSpawn;
+}
+
+double AircraftTypeExt::GetMissileScatterDivergence() const
+{
+	return this->Scatter_Divergence.Get(RulesExt::Global()->Scatter_Divergence);
 }
 
 void AircraftTypeExt::LoadFromStream(PhobosStreamReader& Stm)

@@ -8,6 +8,7 @@
 
 #include <Ext/AircraftType/Body.h>
 #include <Ext/BuildingType/Body.h>
+#include <Ext/Bullet/Body.h>
 #include <Ext/WarheadType/Body.h>
 #include <Ext/WeaponType/Body.h>
 
@@ -176,8 +177,17 @@ namespace
 		pExt->Homing_Active = false;
 		pExt->Homing_Target = nullptr;
 
-		// 在目标单位当前坐标(含高度)引爆
-		WarheadTypeExt::DetonateAt(warhead, pTarget->GetCenterCoords(), pMissile, damage, pMissile->Owner);
+		// 在目标单位当前坐标(含高度)引爆。Missile.Scatter 对空只偏空爆的横坐标 ——
+		// 弹道仍制导到目标中心, 否则大偏移会让导弹从引信球外掠过、永远不炸。
+		auto burstCoords = pTarget->GetCenterCoords();
+
+		if (pExt->Scatter_Initialized)
+		{
+			burstCoords.X += pExt->Scatter_Offset.X;
+			burstCoords.Y += pExt->Scatter_Offset.Y;
+		}
+
+		WarheadTypeExt::DetonateAt(warhead, burstCoords, pMissile, damage, pMissile->Owner);
 
 		// 载荷已经由上面施加, 弹体必须"无声"抹除: 不能再走正常死亡流程, 否则命中点会
 		// 再吃一次 TechnoClass::FireDeathWeapon (0x70D690) 打出的武器 —— 它先读类型的
@@ -191,6 +201,58 @@ namespace
 		pMissile->UnInit();
 
 		return true;
+	}
+
+	// ---- Missile.Scatter 子机导弹弹道散布的数值辅助 ----
+	// 子机导弹没有自己的抛射体类型, 所以散布区间直接取 AircraftType 上的 Missile.Scatter.*
+	// (单位: 格)。距离因子 / 半径整形 / 面积守恒椭圆全部复用通用散布的同一套公式
+	// (BulletExt), 不复制第二份, 以免两条路径的语义漂移。
+	std::pair<int, int> ComputeMissileScatterInterval(AircraftTypeExt* pTypeExt,
+		const CoordStruct& launchCoord, const CoordStruct& targetCoord, const double spawnerRange)
+	{
+		// 健壮性: 负值按 0, 非有限值回退默认, Max<Min 交换 (与通用散布的夹值口径一致)。
+		double minCells = pTypeExt->Scatter_Min.Get();
+		double maxCells = pTypeExt->Scatter_Max.Get();
+
+		if (!std::isfinite(minCells) || minCells < 0.0)
+			minCells = 0.0;
+		if (!std::isfinite(maxCells) || maxCells < 0.0)
+			maxCells = 1.5;
+		if (maxCells < minCells)
+			std::swap(minCells, maxCells);
+
+		const double distance = launchCoord.DistanceFrom(targetCoord);
+		const double range = spawnerRange > 0.0 ? spawnerRange : distance;
+		const double factor = BulletExt::ScatterDistanceFactor(distance, range, pTypeExt->GetMissileScatterDivergence());
+
+		const int min = static_cast<int>(std::lround(minCells * Unsorted::LeptonsPerCell * factor));
+		const int max = static_cast<int>(std::lround(maxCells * Unsorted::LeptonsPerCell * factor));
+
+		return std::make_pair(std::min(min, max), std::max(min, max));
+	}
+
+	bool IsMissileScatterTargetAlive(TechnoClass* pTarget)
+	{
+		// 与制导的失锁口径一致: 死亡/移除/隐形后不再跟踪真实位置, 改飞最后记录点。
+		return pTarget && AircraftExt::IsTrackedTargetValid(pTarget)
+			&& pTarget->IsAlive && !pTarget->InLimbo
+			&& pTarget->CloakState != CloakState::Cloaked;
+	}
+
+	// 当前瞄准点: 对地 = 目标中心 + 固定偏移, Z 归一到地面 (保持"触地爆炸"语义);
+	// 对空 = 目标中心 (偏移只用于空爆坐标, 物理飞偏会让导弹从引信球外掠过)。
+	CoordStruct ComputeMissileScatterTargetAim(AircraftExt* pExt, TechnoClass* pTarget)
+	{
+		CoordStruct aim = pTarget->GetCenterCoords();
+
+		if (!pTarget->IsInAir())
+		{
+			aim.X += pExt->Scatter_Offset.X;
+			aim.Y += pExt->Scatter_Offset.Y;
+			aim.Z = MapClass::Instance.GetCellFloorHeight(aim);
+		}
+
+		return aim;
 	}
 }
 
@@ -366,12 +428,27 @@ bool AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
 	// 改动前的纯追踪 (验收 A1/A6)。
 	auto aimCrd = HomingComputeAimPoint(misCrd, targetCrd, pExt, pTypeExt);
 
-	// 地面目标: 瞄点 Z 归一到地面高度 (保持"触地爆炸"语义);
-	// 空中目标: 保留完整 3D 坐标, 让导弹真的朝飞机爬升/俯冲。
+	// Missile.Scatter: 在最终瞄准点上叠加发射瞬间抽定的固定偏移(对地物理飞偏)。
+	// 对空不叠加 —— 弹道仍制导到目标中心, 偏移只在 HomingAirBurst 里加到空爆坐标,
+	// 否则大偏移会让导弹从引信球外掠过、永远不炸。
 	if (!targetInAir)
+	{
+		if (pExt->Scatter_Initialized)
+		{
+			aimCrd.X += pExt->Scatter_Offset.X;
+			aimCrd.Y += pExt->Scatter_Offset.Y;
+		}
+
+		// 地面目标: 瞄点 Z 归一到地面高度 (保持"触地爆炸"语义)。
 		aimCrd.Z = MapClass::Instance.GetCellFloorHeight(aimCrd);
+	}
+	// 空中目标: 保留完整 3D 坐标, 让导弹真的朝飞机爬升/俯冲。
 
 	pExt->Homing_LastAim = aimCrd;
+
+	// Missile.Scatter: 失锁后的兜底瞄准点与制导路径同源 (已含固定偏移)。
+	if (pExt->Scatter_Initialized)
+		pExt->Scatter_LastAim = aimCrd;
 
 	// 方案 D (对齐 Kratos): 原版火箭的每帧转向步(0x662A32/steps)读取的是
 	// RocketLocomotionClass::MovingDestination, 而不是 FootClass::Destination;
@@ -392,6 +469,138 @@ bool AircraftExt::UpdateMissileHoming(AircraftClass* pMissile)
 	pExt->Homing_HasPrev = true;
 
 	return false;
+}
+
+// Missile.Scatter: 发射(起飞)阶段抽定散布偏移, 并返回本发导弹的初始瞄准点。
+// 该钩子在起飞阶段每帧重入, 因此本函数必须幂等: 偏移只抽一次, 之后只刷新瞄准点
+// (目标在此期间可能移动)。返回 false = 本发不启用散布(未写键 / 半径 0 / 无目标)。
+bool AircraftExt::InitMissileScatter(AircraftClass* pMissile, TechnoClass* pOwner, AbstractClass* pTarget, CoordStruct& aim)
+{
+	if (!pMissile || !pTarget)
+		return false;
+
+	auto const pTypeExt = AircraftTypeExt::Fetch(pMissile->Type);
+
+	if (!pTypeExt->IsMissileScatterEnabled())
+		return false;
+
+	auto const pExt = AircraftExt::TryFetch(pMissile);
+
+	if (!pExt)
+		return false;
+
+	if (pExt->Scatter_Initialized)
+		return AircraftExt::GetMissileScatterAim(pMissile, aim);
+
+	// 发射点优先取发射车/发射建筑 (Divergence 的距离从那里量), 取不到时退化为导弹当前位置。
+	const CoordStruct launchCoord = pOwner ? pOwner->GetCoords() : pMissile->GetCoords();
+	const CoordStruct targetCoord = pTarget->GetCenterCoords();
+
+	// Divergence 的距离分母 = 发射者的"子机武器(Spawner=yes)"射程;
+	// 找不到时退化为发射距离, 等价于 factor = 1。
+	double spawnerRange = 0.0;
+
+	if (pOwner)
+	{
+		if (auto const pOwnerType = pOwner->GetTechnoType())
+		{
+			for (int i = 0; i < pOwnerType->WeaponCount; ++i)
+			{
+				auto const pWeapon = pOwner->GetWeapon(i);
+
+				if (pWeapon && pWeapon->WeaponType && pWeapon->WeaponType->Spawner)
+				{
+					spawnerRange = static_cast<double>(pWeapon->WeaponType->Range);
+					break;
+				}
+			}
+		}
+	}
+
+	const auto interval = ComputeMissileScatterInterval(pTypeExt, launchCoord, targetCoord, spawnerRange);
+
+	// 半径 0 (Min=Max=0, 或贴脸发射使距离因子为 0): 不散布、不写任何状态,
+	// 保持与改动前逐位一致的原版落地行为, 也满足"Min=0/Max=0 回到命中中心"。
+	if (interval.second <= 0)
+		return false;
+
+	const int raw = ScenarioClass::Instance->Random.RandomRanged(interval.first, interval.second);
+	const int radius = BulletExt::ShapeScatterRadius(raw, interval.first, interval.second, pTypeExt->Scatter_Sigma.Get());
+	const double angle = ScenarioClass::Instance->Random.RandomDouble() * Math::TwoPi;
+
+	// 以目标中心为基准画极坐标偏移, 再按面积守恒椭圆整形 (方向 = 发射点 -> 目标)。
+	CoordStruct scattered = targetCoord;
+	scattered.X += static_cast<int>(std::lround(radius * Math::cos(angle)));
+	scattered.Y += static_cast<int>(std::lround(radius * Math::sin(angle)));
+	BulletExt::ApplyScatterAspect(scattered, targetCoord, targetCoord - launchCoord, pTypeExt->Scatter_Aspect.Get());
+
+	pExt->Scatter_Offset = CoordStruct { scattered.X - targetCoord.X, scattered.Y - targetCoord.Y, 0 };
+	pExt->Scatter_Target = abstract_cast<TechnoClass*>(pTarget);
+	pExt->Scatter_Initialized = true;
+
+	// 对空目标: 瞄准点保持目标中心 (偏移只用于空爆坐标);
+	// 对地/建筑/格子目标: 目标中心 + 偏移, Z 归一到地面 (触地引爆语义)。
+	if (pExt->Scatter_Target && pExt->Scatter_Target->IsInAir())
+	{
+		pExt->Scatter_LastAim = targetCoord;
+	}
+	else
+	{
+		pExt->Scatter_LastAim = scattered;
+		pExt->Scatter_LastAim.Z = MapClass::Instance.GetCellFloorHeight(pExt->Scatter_LastAim);
+	}
+
+	aim = pExt->Scatter_LastAim;
+	return true;
+}
+
+// Missile.Scatter: 取当前散布瞄准点 (目标存活时按"目标中心 + 固定偏移"重算并刷新
+// Scatter_LastAim; 目标已失效/隐形时继续用最后记录点)。返回 false = 本发没有散布。
+bool AircraftExt::GetMissileScatterAim(AircraftClass* pMissile, CoordStruct& aim)
+{
+	auto const pExt = AircraftExt::TryFetch(pMissile);
+
+	if (!pExt || !pExt->Scatter_Initialized)
+		return false;
+
+	auto const pTarget = pExt->Scatter_Target;
+
+	if (IsMissileScatterTargetAlive(pTarget))
+		pExt->Scatter_LastAim = ComputeMissileScatterTargetAim(pExt, pTarget);
+
+	aim = pExt->Scatter_LastAim;
+	return true;
+}
+
+// Missile.Scatter: 每帧刷新非制导路径的瞄准点 (由 0x414DA8 钩子在 UpdateMissileHoming
+// 之后调用)。制导中的导弹由 UpdateMissileHoming 负责瞄准(其中已叠加偏移), 这里跳过。
+void AircraftExt::UpdateMissileScatter(AircraftClass* pMissile)
+{
+	auto const pExt = AircraftExt::TryFetch(pMissile);
+
+	if (!pExt || !pExt->Scatter_Initialized || pExt->Homing_Active)
+		return;
+
+	if (!pMissile->IsAlive || pMissile->InLimbo)
+		return;
+
+	auto const pTypeExt = AircraftTypeExt::Fetch(pMissile->Type);
+
+	if (!pTypeExt->IsMissileScatterEnabled())
+		return;
+
+	CoordStruct aim {};
+
+	if (!AircraftExt::GetMissileScatterAim(pMissile, aim))
+		return;
+
+	// 与 Missile.Homing 同一套写入口径: 原版火箭每帧转向/到达判定真正读取的是
+	// RocketLocomotionClass::MovingDestination, FootClass::Destination 只作兼容兜底。
+	if (auto const pLoco = locomotion_cast<RocketLocomotionClass*>(pMissile->Locomotor))
+		pLoco->MovingDestination = aim;
+
+	if (auto const pCell = MapClass::Instance.TryGetCellAt(aim))
+		pMissile->SetDestination(pCell, true);
 }
 
 // Paradrop, spy plane, airstrike.
@@ -585,6 +794,11 @@ void AircraftExt::Serialize(T& Stm)
 		.Process(this->Homing_LastAim)
 		// 新增字段一律追加在链尾（插在中间会让旧存档整体错位一格）
 		.Process(this->Loiter_HoverState)
+		// Missile.Scatter —— 子机导弹弹道散布 (每颗导弹的固定偏移 + 跟随目标)
+		.Process(this->Scatter_Initialized)
+		.Process(this->Scatter_Offset)
+		.Process(this->Scatter_Target)
+		.Process(this->Scatter_LastAim)
 		;
 }
 

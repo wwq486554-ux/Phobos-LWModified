@@ -861,22 +861,36 @@ DEFINE_HOOK(0x6B75AC, SpawnManagerClass_AI_SetDestinationForMissiles, 0x5)
 	GET(TechnoClass*, pSpawnTechno, EDI);
 
 	auto const pTarget = pSpawnManager->Target;
+	bool missileScatterActive = false;
+	CoordStruct missileScatterAim {};
 
-	// Missile.Homing: 发射瞬间锁定目标对象, 供飞行中持续跟踪
 	if (pSpawnTechno->WhatAmI() == AbstractType::Aircraft)
 	{
 		auto const pMissile = static_cast<AircraftClass*>(pSpawnTechno);
 
+		// Missile.Homing: 发射瞬间锁定目标对象, 供飞行中持续跟踪
 		if (AircraftTypeExt::Fetch(pMissile->Type)->Missile_Homing)
 		{
 			if (auto const pTargetTechno = abstract_cast<TechnoClass*>(pTarget))
 				AircraftExt::StartMissileHoming(pMissile, pTargetTechno);
 		}
+
+		// Missile.Scatter: 起飞阶段这个分支每帧都会跑, 函数内部幂等(偏移只抽一次)。
+		missileScatterActive = AircraftExt::InitMissileScatter(pMissile, pSpawnManager->Owner, pTarget, missileScatterAim);
 	}
 
+	// Missile.Scatter: 初始目的地也必须是散布后的瞄准格(对空目标时 Init 已退回目标中心),
+	// 否则 LazyCurve=yes 的纯弹道导弹会落回目标中心; 飞行中的刷新由 0x414DA8 钩子负责。
+	if (missileScatterActive)
+	{
+		if (auto const pCell = MapClass::Instance.TryGetCellAt(missileScatterAim))
+			pSpawnTechno->SetDestination(pCell, true);
+		else
+			pSpawnTechno->SetDestination(pTarget, true);
+	}
 	// Oct 27, 2025 - Starkku: Restore old behaviour for building destinations to eliminate inaccuracy issues.
 	// Aug 10, 2026 - Ollerus: Add a toggle since it'll affect the falling point and result in damage change.
-	if (!RulesExt::Global()->MissileSpawnAttackCell || pTarget->WhatAmI() == AbstractType::Building)
+	else if (!RulesExt::Global()->MissileSpawnAttackCell || pTarget->WhatAmI() == AbstractType::Building)
 	{
 		pSpawnTechno->SetDestination(pTarget, true);
 	}
@@ -1786,6 +1800,11 @@ DEFINE_HOOK(0x7077FD, TechnoClass_PointerExpired_SpawnOwnerFix, 0x6)
 				pExt->Homing_Target = nullptr;
 				pExt->Homing_Active = false;
 			}
+
+			// Missile.Scatter: 同一个指针失效通知里清掉散布的跟随目标,
+			// 之后导弹改飞 Scatter_LastAim(最后瞄准点, 含偏移)。
+			if (pExt->Scatter_Target == pRemove)
+				pExt->Scatter_Target = nullptr;
 		}
 	}
 

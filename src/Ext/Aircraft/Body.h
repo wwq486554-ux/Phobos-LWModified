@@ -42,6 +42,12 @@ public:
 	double Homing_TargetVelY;
 	double Homing_TargetVelZ;
 
+	// Missile.Scatter —— 子机导弹弹道散布 (每颗导弹一份; 偏移在发射瞬间抽一次)
+	bool Scatter_Initialized; // 偏移是否已抽定 (起飞阶段钩子每帧重入, 保证只抽一次)
+	CoordStruct Scatter_Offset; // 相对目标中心的世界坐标偏移 (Z 恒 0)
+	TechnoClass* Scatter_Target; // 跟随移动的目标 (建筑/单位均可, 失效后靠 LastAim 兜底)
+	CoordStruct Scatter_LastAim; // 最后一次写出的瞄准点 (含偏移, 失锁后飞往此处)
+
 	explicit AircraftExt(AircraftClass* const OwnerObject) : FootExt(OwnerObject)
 		, Strafe_BombsDroppedThisRound { 0 }
 		, Strafe_TargetCell { nullptr }
@@ -63,6 +69,10 @@ public:
 		, Homing_TargetVelX { 0.0 }
 		, Homing_TargetVelY { 0.0 }
 		, Homing_TargetVelZ { 0.0 }
+		, Scatter_Initialized { false }
+		, Scatter_Offset {}
+		, Scatter_Target { nullptr }
+		, Scatter_LastAim {}
 	{ }
 
 	AircraftClass* OwnerObject() const
@@ -89,6 +99,14 @@ public:
 	// 目标是否仍在 TechnoClass::Array 中 (对象删除前必先移出数组);
 	// 用于在对目标解引用前验活, 防止访问已释放对象。
 	static bool IsTrackedTargetValid(TechnoClass* pTarget);
+
+	// Missile.Scatter 子机导弹弹道散布:
+	// InitMissileScatter 在发射(起飞)阶段调用, 每帧重入但只在第一帧抽偏移;
+	// UpdateMissileScatter 每帧刷新非制导路径的瞄准点 (制导路径在 UpdateMissileHoming 内叠加);
+	// GetMissileScatterAim 取"当前散布瞄准点"(含偏移), 供 Kamikaze 节点格同步用。
+	static bool InitMissileScatter(AircraftClass* pMissile, TechnoClass* pOwner, AbstractClass* pTarget, CoordStruct& aim);
+	static void UpdateMissileScatter(AircraftClass* pMissile);
+	static bool GetMissileScatterAim(AircraftClass* pMissile, CoordStruct& aim);
 
 	class ExtContainer final : public Container<AircraftExt>
 	{

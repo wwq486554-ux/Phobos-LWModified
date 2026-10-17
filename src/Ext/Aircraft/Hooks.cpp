@@ -889,6 +889,9 @@ DEFINE_HOOK(0x414DA8, AircraftClass_Update_UnlandableDamage, 0x6) // After FootC
 	if (AircraftExt::UpdateMissileHoming(pThis))
 		return 0;
 
+	// Missile.Scatter: 刷新非制导路径的散布瞄准点 (制导路径在上面已叠加过偏移)。
+	AircraftExt::UpdateMissileScatter(pThis);
+
 	// AdvancedAircraftMissions: 记录击杀点 + 收尾返航提速窗口（每台机同帧一致）
 	AdvancedMissions::Update(pThis);
 
@@ -1620,30 +1623,44 @@ DEFINE_HOOK(0x4143A8, AircraftClass_UnLimbo_CargoPlane, 0x6)
 // 重新定向(约每 2 帧一次)。普通刷新 FootClass::Destination 会被它覆盖, 因此
 // 直接钩在原版读取该节点 Cell 的指令之前(0x54E51D 处 EAX=KamikazeControl*),
 // 把它刷成目标单位当前所在格 —— 与原版重定向同节奏, 导弹就会持续追踪目标。
+// Missile.Scatter: 同一条链上把节点格刷成"散布后的瞄准格", 否则物理飞偏会被抵消。
 DEFINE_HOOK(0x54E51D, KamikazeContainer_Update_MissileHomingCell, 0x5)
 {
 	GET(Kamikaze::KamikazeControl* const, pNode, EAX);
 
 	auto const pMissile = pNode->Item;
-	if (!pMissile)
+	if (!pMissile || !pMissile->Type->MissileSpawn)
 		return 0;
 
 	auto const pTypeExt = AircraftTypeExt::Fetch(pMissile->Type);
-	if (!pTypeExt->Missile_Homing || !pMissile->Type->MissileSpawn)
-		return 0;
-
 	auto const pExt = AircraftExt::TryFetch(pMissile);
-	if (!pExt)
+
+	if (!pExt || (!pTypeExt->Missile_Homing && !pExt->Scatter_Initialized))
 		return 0;
 
-	// 兜底激活: 若发射钩子未跑到, 且 Kamikaze 节点的 Cell 本身就是目标单位
-	if (!pExt->Homing_Active)
+	// 兜底激活(仅制导): 若发射钩子未跑到, 且 Kamikaze 节点的 Cell 本身就是目标单位
+	if (pTypeExt->Missile_Homing && !pExt->Homing_Active)
 	{
 		if (auto const pTargetTechno = abstract_cast<TechnoClass*>(pNode->Cell))
 			AircraftExt::StartMissileHoming(pMissile, pTargetTechno);
 	}
 
-	if (!pExt->Homing_Active)
+	// Missile.Scatter: 散布瞄准点(目标中心 + 固定偏移)已经由每帧更新维护,
+	// 这里把节点格拉到同一处, 让引擎的重定向与我们的瞄准同源。
+	if (pExt->Scatter_Initialized)
+	{
+		CoordStruct scatterAim {};
+
+		if (AircraftExt::GetMissileScatterAim(pMissile, scatterAim))
+		{
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(scatterAim))
+				pNode->Cell = pCell;
+
+			return 0;
+		}
+	}
+
+	if (!pTypeExt->Missile_Homing || !pExt->Homing_Active)
 		return 0;
 
 	auto const pTarget = pExt->Homing_Target;
@@ -1670,19 +1687,35 @@ DEFINE_HOOK(0x54E51D, KamikazeContainer_Update_MissileHomingCell, 0x5)
 
 // Missile.Homing: 引擎本 tick 用节点 Cell 处理完导弹后, 再把 FootClass 目的地
 // 拉回目标当前格 —— 与引擎重定向同节奏双保险 (覆盖"飞行导航只认目的地"的情形)。
+// Missile.Scatter: 同样改为散布瞄准格。
 DEFINE_HOOK(0x54E56D, KamikazeContainer_Update_MissileHomingAfter, 0x6)
 {
 	GET(AircraftClass* const, pMissile, ESI);
 
-	if (!pMissile)
+	if (!pMissile || !pMissile->Type->MissileSpawn)
 		return 0;
 
 	auto const pTypeExt = AircraftTypeExt::Fetch(pMissile->Type);
-	if (!pTypeExt->Missile_Homing || !pMissile->Type->MissileSpawn)
+	auto const pExt = AircraftExt::TryFetch(pMissile);
+
+	if (!pExt || (!pTypeExt->Missile_Homing && !pExt->Scatter_Initialized))
 		return 0;
 
-	auto const pExt = AircraftExt::TryFetch(pMissile);
-	if (!pExt || !pExt->Homing_Active)
+	// Missile.Scatter: 与 0x54E51D 同源, 把 FootClass 目的地也拉回散布瞄准格。
+	if (pExt->Scatter_Initialized)
+	{
+		CoordStruct scatterAim {};
+
+		if (AircraftExt::GetMissileScatterAim(pMissile, scatterAim))
+		{
+			if (auto const pCell = MapClass::Instance.TryGetCellAt(scatterAim))
+				pMissile->SetDestination(pCell, true);
+
+			return 0;
+		}
+	}
+
+	if (!pTypeExt->Missile_Homing || !pExt->Homing_Active)
 		return 0;
 
 	auto const pTarget = pExt->Homing_Target;

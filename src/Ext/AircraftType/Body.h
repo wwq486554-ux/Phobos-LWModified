@@ -56,6 +56,15 @@ public:
 	Nullable<int> Homing_FuzeRadius; // Missile.Homing.FuzeRadius (leptons, 扫掠段引信半径)
 	Nullable<bool> Homing_AbortDive; // Missile.Homing.AbortDive (yes=目标还远时可中止俯冲拉起, no=提交俯冲砸地)
 
+	// Missile.Scatter —— 子机导弹弹道散布 (MissileSpawn=yes 的 AircraftType)
+	// 键写在导弹自己的类型段; 不写 Missile.Scatter 或半径全 0 时行为与原版逐位一致。
+	Valueable<bool> Scatter_Enabled; // Missile.Scatter (总闸)
+	Valueable<double> Scatter_Min; // Missile.Scatter.Min (格, 散布半径下限; 负值按 0)
+	Valueable<double> Scatter_Max; // Missile.Scatter.Max (格, 散布半径上限; Max<Min 时交换)
+	Valueable<double> Scatter_Sigma; // Missile.Scatter.Sigma (半径分布指数, 夹 [0.5,16])
+	Valueable<double> Scatter_Aspect; // Missile.Scatter.Aspect (面积守恒椭圆比, 夹 [0.125,8])
+	Nullable<double> Scatter_Divergence; // Missile.Scatter.Divergence (留空 = 继承 [General] Divergence)
+
 	explicit AircraftTypeExt(AircraftTypeClass* const OwnerObject) : TechnoTypeExt(OwnerObject)
 		, VoicePickup {}
 		, SpawnFromEdge {}
@@ -98,12 +107,23 @@ public:
 		, Homing_MaxLeadTime {}
 		, Homing_FuzeRadius {}
 		, Homing_AbortDive {}
+		, Scatter_Enabled { false }
+		, Scatter_Min { 0.0 }
+		, Scatter_Max { 1.5 }
+		, Scatter_Sigma { 1.0 }
+		, Scatter_Aspect { 1.0 }
+		, Scatter_Divergence {}
 	{ }
 
 	AircraftTypeClass* OwnerObject() const
 	{
 		return static_cast<AircraftTypeClass*>(this->GetAttachedObject());
 	}
+
+	// Missile.Scatter: 是否对本类型生效 (总闸 + 必须是 MissileSpawn 导弹)
+	bool IsMissileScatterEnabled() const;
+	// Missile.Scatter.Divergence: 留空时继承 [General] Divergence (与通用散布一致)
+	double GetMissileScatterDivergence() const;
 
 	class ExtContainer final : public Container<AircraftTypeExt>
 	{

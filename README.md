@@ -74,9 +74,31 @@ The list below is a summary; the complete reference for every key is in
 
 ### Units and abilities / 单位与技能
 
-- **[SpecialAction](docs/New-or-Enhanced-Logics.md#specialaction)** — unit-triggered
-  active abilities with their own cooldown, an optional per-unit super weapon and
-  cooldown pips.
+- **[SpecialAction](docs/New-or-Enhanced-Logics.md#specialaction)** — a unified,
+  player-triggered action entry point for any TechnoType, bound to the **Special Action**
+  hotkey. It is a dispatcher into existing game systems rather than one scripted effect,
+  so a single unit can expose several independent abilities:
+  - **weapon firing** — arm the unit so its *next* firing cycle uses one of its own weapon
+    slots, then attack normally; `Burst`, ammo, animations and targeting all stay vanilla;
+  - **deployment and transformation** — the complete vanilla deploy package, or only its
+    parts: the `DeploysInto` building transformation, a one-way `Convert` to another
+    TechnoType, the deploy weapon fired at the unit's own position (`DeployFire`), and
+    passenger release without deploying (`Unload`);
+  - **super weapons** — fire a super weapon at the unit's own position through the normal
+    launch queue, optionally from a super weapon the unit itself carries
+    (`SpecialAction.SuperWeaponSource=unit`) instead of the owner's sidebar one;
+  - **attached effects** — release and/or strip the listed Attach Effects on the unit
+    itself, with duration overrides and group-based removal;
+  - **aircraft return** — order the aircraft home immediately, sharing the ability and its
+    cooldown with the airfield right-click.
+
+  The deploy-family actions are deliberately **decoupled from the vanilla deploy hotkey**:
+  the ability reads its own parameters instead of the type's `DeploysInto`/`DeployFire`
+  keys, so one vehicle can keep vanilla deploy on the Deploy hotkey and still expose a
+  second, independent deploy-family ability. Each action has its own cooldown
+  (`SpecialActionROF`, with an elite override), its own voice and optional cooldown pips,
+  all independent of weapon `ROF`, super weapon recharge and deploy time;
+  `EliteSpecialAction` replaces the action at elite veterancy.
 - **[Extra weapons](docs/New-or-Enhanced-Logics.md#extra-weapons)** — any TechnoType can
   mount additional weapons that fire at the current target alongside the engine-driven
   one, each on its own `ROF`, `Burst`, projectile, damage and range.

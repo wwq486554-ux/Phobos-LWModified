@@ -226,6 +226,16 @@ void MissileTrajectory::OpenFire()
 	// Set the initial launch state of the projectile
 	if (pType->UniqueCurve) // Simulate ballistic missile trajectory
 	{
+		// This branch never calls InitializeBulletNotCurve, so the fixed Trajectory.OffsetCoord and
+		// the universal random scatter have to be resolved here, before any velocity is derived
+		// from the aim point. UniqueCurve has no pre-aim segment, so the offset is not rotated.
+		const auto pBullet = this->Bullet;
+		const auto pFirer = pBullet->Owner;
+		const auto& source = pFirer ? pFirer->GetCoords() : pBullet->SourceCoords;
+		const auto& target = pBullet->TargetCoords;
+
+		this->CalculateOffsetCoords(source, target, 0.0);
+
 		// Basic speed
 		this->MovingVelocity.X = 0;
 		this->MovingVelocity.Y = 0;
@@ -324,13 +334,8 @@ void MissileTrajectory::InitializeBulletNotCurve()
 	else
 		rotateRadian = -(pFirer->PrimaryFacing.Current().GetRadian<32>());
 
-	// Add the fixed offset value
-	if (pType->OffsetCoord != CoordStruct::Empty)
-		this->OffsetCoord = this->GetOnlyStableOffsetCoords(rotateRadian);
-
-	// Add random offset value
-	if (pBullet->Type->Inaccurate)
-		this->OffsetCoord = this->GetInaccurateTargetCoords((target + this->OffsetCoord), BulletExt::GetScatterOffsets(pBullet, source, target)) - target;
+	// Fixed Trajectory.OffsetCoord + universal random scatter
+	this->CalculateOffsetCoords(source, target, rotateRadian);
 
 	// Without setting an initial direction, it will be launched directly towards the target
 	if (pType->PreAimCoord == CoordStruct::Empty)
@@ -355,6 +360,33 @@ void MissileTrajectory::InitializeBulletNotCurve()
 		if (std::abs(pType->RotateCoord) > BulletExt::Epsilon && this->CountOfBurst > 1)
 			this->DisperseBurstSubstitution(rotateRadian);
 	}
+}
+
+// Resolve the aim offset of the shot: the fixed Trajectory.OffsetCoord (rotated into the firing
+// frame) plus the universal random scatter when the projectile is Inaccurate. Shared by the
+// normal branch and the UniqueCurve branch of OpenFire so both aim at the same "target + offset"
+// point, and by the pre-detonation snap through GetPreDetonateSnapCoords.
+void MissileTrajectory::CalculateOffsetCoords(const CoordStruct& source, const CoordStruct& target, const double rotateRadian)
+{
+	// Add the fixed offset value
+	if (this->Type->OffsetCoord != CoordStruct::Empty)
+		this->OffsetCoord = this->GetOnlyStableOffsetCoords(rotateRadian);
+
+	// Add random offset value
+	if (this->Bullet->Type->Inaccurate)
+		this->OffsetCoord = this->GetInaccurateTargetCoords(target + this->OffsetCoord, BulletExt::GetScatterOffsets(this->Bullet, source, target)) - target;
+}
+
+// Snap onto the aim point, not onto the centre of the target object: BallisticScatter.Min/Max and
+// a fixed Trajectory.OffsetCoord must survive the final snap, otherwise a small offset is drawn in
+// and then immediately wiped out again. Without an offset this stays byte-identical to the base
+// class (the vanilla snap).
+CoordStruct MissileTrajectory::GetPreDetonateSnapCoords() const
+{
+	if (this->OffsetCoord == CoordStruct::Empty)
+		return this->ActualTrajectory::GetPreDetonateSnapCoords();
+
+	return this->Bullet->TargetCoords + this->OffsetCoord;
 }
 
 CoordStruct MissileTrajectory::GetPreAimCoordsWithBurst()

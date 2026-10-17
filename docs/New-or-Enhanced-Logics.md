@@ -5411,6 +5411,17 @@ SweepFire.InfantryFireAnim=true ; boolean
   - `ClusterScatter`
   - SweepFire, whose follow-up shots use the same helper as the trajectory path
 - `BallisticScatter.Min/Max` fall back to `[CombatDamage] -> BallisticScatter` when they are not set. The visible `Fire_At` branch and the `FlakScatter` trajectory branch use `0 ~ BallisticScatter`, while the legacy `Inaccurate` branch and the non-`FlakScatter` trajectory branch use `BallisticScatter/2 ~ BallisticScatter`.
+- Vanilla `ROT` / `Arm` missiles now take part too, through their burst point. The engine steers such a projectile to the centre of the live target object every frame, and both of the engine's own scatter sites are gated on `Arcing` / `Inviso`, so a `BallisticScatter.Min/Max` pair on such a projectile used to be a dead key. The final burst coordinate is the one place that can be moved without touching the guidance source, so the offset is applied there: the coordinate the engine itself worked out is displaced once with the same recipe, and only then handed to the explosion.
+  - Implicit gate: the projectile wrote `BallisticScatter.Min` or `.Max`, has `ROT > 0` or `Arm > 0`, and is neither `Arcing`, `Inviso` nor a projectile with a `Trajectory=`. No new INI key is involved, and a projectile that does not write the interval stays unchanged bit for bit.
+  - The reference point is the engine's own final burst coordinate, not a fresh lookup of the target: a `Ranged` early detonation explodes where it happened instead of teleporting onto the target, and a burst point the engine has already snapped is kept.
+  - With `Cluster > 1` the centre is offset first and the engine's own `ClusterScatter` is layered on top of that centre, so the extra detonations spread around the offset point instead of the target.
+  - The projectile body still flies to the target centre; only the burst point moves. Large offsets therefore look like "it hit the target and exploded beside it". Moving the body too would mean rewriting the engine's homing target source, which is deliberately not done.
+- `Trajectory=Missile` keeps its aim offset through the final snap. `ActualTrajectory::OnPreDetonate` used to snap onto the target centre whenever the projectile came within `Trajectory.TargetSnapDistance`, which drew a scatter radius smaller than the snap radius straight back onto the centre. The snap now targets `TargetCoords + offset`: `BallisticScatter.Min/Max` survives, a fixed `Trajectory.OffsetCoord` survives, and the snap still does its job of keeping a near miss from overshooting the target.
+  - `Trajectory.TargetSnapDistance` keeps working - `0` still disables the snap completely - but it no longer has to be set to `0` just to keep the scatter.
+  - `Trajectory.Missile.UniqueCurve=yes` now honours the offset as well. That branch skipped the normal initialisation entirely, so neither a fixed `Trajectory.OffsetCoord` nor a random scatter was ever computed for it; both now go through the same helper as the ordinary branch.
+  - Only the `Missile` trajectory overrides the snap target. `Straight`, `Bombard` and `Parabola` keep the vanilla snap byte for byte, so `Trajectory.TargetSnapDistance=0` remains the way to keep their scatter.
+  - A fixed `Trajectory.OffsetCoord` smaller than 32 leptons on a projectile that is not `Inaccurate` can still be overwritten by the engine's own "within 32 of the target" rewrite. That is the same result as before this change, and a random scatter always brings `Inaccurate=yes` with it, so only that narrow combination is affected.
+  - Nothing above changes a projectile that resolves to no offset at all: with an empty offset the snap target is the target centre exactly as before.
 
 In `rulesmd.ini`:
 ```ini
@@ -5427,6 +5438,34 @@ Divergence=0.6                  ; floating point value, distance ramp exponent, 
 
 ```{note}
 On the two `TechnoClass::Fire_At` paths Ares already draws the radius from the projectile's own `BallisticScatter.Min/Max`, because it hooks both sites. Phobos therefore only shapes that radius there, and remaps the engine's own draw only when Ares is not loaded. The interval a projectile configures is the same either way, and `Sigma`, `Aspect` and `Divergence` apply in both cases.
+```
+
+A vanilla homing missile is enabled by the interval alone - there is no extra key:
+```ini
+[GODSBANEFRAGPS]                ; Projectile
+ROT=100                         ; or Arm=, a fuse-only missile is covered too
+Arm=2
+Inaccurate=yes
+FlakScatter=yes
+BallisticScatter.Min=1          ; dead key before, now scatters the burst point
+BallisticScatter.Max=2
+Sigma=1.0                       ; optional
+Aspect=1.0                      ; optional
+Divergence=1.0                  ; optional, linear; unset uses [General] Divergence
+```
+
+A `Trajectory=Missile` projectile uses the same keys, and the snap no longer has to be disabled:
+```ini
+[SOMEPROJECTILE]
+Trajectory=Missile
+Trajectory.Speed=150.0
+Inaccurate=yes
+FlakScatter=yes
+BallisticScatter.Min=0.5
+BallisticScatter.Max=2.0
+; Trajectory.TargetSnapDistance can stay at its default now, or be 0 to disable the snap
+; Trajectory.OffsetCoord=1,2,0   ; fixed offset, survives the snap now
+; Trajectory.Missile.UniqueCurve=yes also honours the offset keys
 ```
 
 ### Carryall (jumpjet vehicles lifting other vehicles)

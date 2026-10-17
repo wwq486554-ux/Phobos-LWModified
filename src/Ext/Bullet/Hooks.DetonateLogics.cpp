@@ -673,6 +673,39 @@ DEFINE_HOOK(0x468EB3, BulletClass_Explodes_AirburstCheck1, 0x6)
 	return !(pType->Airburst || BulletTypeExt::Fetch(pType)->Splits) ? Continue : Skip;
 }
 
+// Universal scatter for vanilla ROT / Arm missiles (the engine-guided kind). The engine steers such
+// a projectile towards the centre of the live target object on every frame, so neither of its own
+// scatter sites is reachable for them: Fire_At scatter requires Inaccurate + Arcing, Unlimbo scatter
+// requires FlakScatter + Inviso. The Fire_At scatter would not help anyway, because it only writes
+// the initial velocity - a homing missile then follows the target straight back to its centre. That
+// leaves the burst point as the only place that can be displaced without touching the guidance source.
+// This hook sits on the single convergence point of BulletClass::Explodes (0x468FF4), just before the
+// coordinate is handed to Detonate / the Cluster loop, so the offset is applied exactly once and the
+// engine's ClusterScatter (if any) is then layered on top of the already-offset centre.
+// The scatter is enabled implicitly by the projectile writing BallisticScatter.Min / .Max, so there is
+// no new INI key and no save data. The random numbers are drawn on the detonation frame from the
+// synchronized RNG, so both clients compute the same point.
+static bool IsDetonationScatterEligible(BulletClass* const pBullet)
+{
+	auto const pType = pBullet->Type;
+	auto const pTypeExt = BulletTypeExt::Fetch(pType);
+
+	// Only projectiles that explicitly wrote a scatter interval take part.
+	if (!pTypeExt->BallisticScatter_Min.isset() && !pTypeExt->BallisticScatter_Max.isset())
+		return false;
+
+	// Only the engine-guided missile kinds.
+	if (pType->ROT <= 0 && pType->Arm <= 0)
+		return false;
+
+	// Never scatter twice: Arcing / Inviso projectiles already go through an engine scatter path,
+	// and a projectile with a trajectory resolves its own aim point by itself.
+	if (pType->Arcing || pType->Inviso)
+		return false;
+
+	return !BulletExt::Fetch(pBullet)->Trajectory;
+}
+
 DEFINE_HOOK(0x468FF4, BulletClass_Explodes_AirburstCheck2, 0x6)
 {
 	enum { Continue = 0x46909A, Skip = 0x469008 };
@@ -682,6 +715,20 @@ DEFINE_HOOK(0x468FF4, BulletClass_Explodes_AirburstCheck2, 0x6)
 	auto const pType = pThis->Type;
 
 	R->EAX(pType);
+
+	// ROT / Arm missiles: bend the final burst point. The reference point is the coordinate the
+	// engine itself worked out, not a fresh target lookup - so a Ranged early detonation explodes
+	// where it happened instead of teleporting onto the target, and an already-snapped coordinate is
+	// kept. The direction is the shot line, the same convention every other scatter path uses.
+	if (IsDetonationScatterEligible(pThis))
+	{
+		REF_STACK(CoordStruct, coords, STACK_OFFSET(0xC, 0));
+		auto const pTarget = abstract_cast<ObjectClass*>(pThis->Target);
+		auto const targetCoords = pTarget ? pTarget->GetCoords() : pThis->TargetCoords;
+
+		coords = BulletExt::GetScatteredCoord(coords, pThis->SourceCoords, targetCoords - pThis->SourceCoords, pType, pThis->WeaponType);
+	}
+
 	return (pType->Airburst || BulletTypeExt::Fetch(pType)->Splits) ? Continue : Skip;
 }
 

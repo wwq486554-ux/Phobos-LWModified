@@ -79,6 +79,7 @@ public:
 	virtual void OnUnlimbo() override;
 	virtual bool OnEarlyUpdate() override;
 	virtual void OnPreDetonate() override;
+	virtual CoordStruct GetPreDetonateSnapCoords() const;
 	virtual void FireTrajectory() { this->OpenFire(); } // New
 
 	inline void CheckProjectileRange()

@@ -115,8 +115,7 @@ void ActualTrajectory::OnPreDetonate()
 	if (targetSnapDistance > 0.0)
 	{
 		const auto pBullet = this->Bullet;
-		const auto pTarget = abstract_cast<ObjectClass*>(pBullet->Target);
-		const auto coords = pTarget ? pTarget->GetCoords() : pBullet->TargetCoords;
+		const auto coords = this->GetPreDetonateSnapCoords();
 
 		// Whether to snap to target?
 		if (coords.DistanceFromSquared(pBullet->Location) <= targetSnapDistance * targetSnapDistance)
@@ -128,6 +127,19 @@ void ActualTrajectory::OnPreDetonate()
 	}
 
 	this->PhobosTrajectory::OnPreDetonate();
+}
+
+// The coordinate the bullet is snapped onto just before detonating. The default keeps the
+// vanilla behaviour byte for byte (the centre of the live target object, or the recorded
+// target coordinates when it is gone / not an object). Trajectories that compute their own
+// aim point can override this - see MissileTrajectory, which must not let the snap undo the
+// scatter offset it aimed at.
+CoordStruct ActualTrajectory::GetPreDetonateSnapCoords() const
+{
+	const auto pBullet = this->Bullet;
+	const auto pTarget = abstract_cast<ObjectClass*>(pBullet->Target);
+
+	return pTarget ? pTarget->GetCoords() : pBullet->TargetCoords;
 }
 
 bool ActualTrajectory::BulletPrepareCheck()

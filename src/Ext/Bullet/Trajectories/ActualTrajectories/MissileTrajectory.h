@@ -105,12 +105,14 @@ public:
 	virtual TrajectoryCheckReturnType OnDetonateUpdate(const CoordStruct& position) override;
 	virtual const PhobosTrajectoryType* GetType() const override { return this->Type; }
 	virtual void OpenFire() override;
+	virtual CoordStruct GetPreDetonateSnapCoords() const override;
 	virtual CoordStruct GetRetargetCenter() const override;
 	virtual void SetBulletNewTarget(AbstractClass* const pTarget) override;
 	virtual bool CalculateBulletVelocity(const double speed) override;
 
 private:
 	void InitializeBulletNotCurve();
+	void CalculateOffsetCoords(const CoordStruct& source, const CoordStruct& target, const double rotateRadian);
 	CoordStruct GetPreAimCoordsWithBurst();
 	bool CalculateReducedVelocity(const double rotateRadian);
 	bool CurveVelocityChange();

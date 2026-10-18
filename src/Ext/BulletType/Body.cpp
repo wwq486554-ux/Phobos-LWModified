@@ -166,6 +166,7 @@ void BulletTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	// Ares 0.7
 	this->BallisticScatter_Min.Read(exINI, pSection, "BallisticScatter.Min");
 	this->BallisticScatter_Max.Read(exINI, pSection, "BallisticScatter.Max");
+	this->BallisticScatter_Physical.Read(exINI, pSection, "BallisticScatter.Physical");
 
 	INI_EX exArtINI(CCINIClass::INI_Art);
 
@@ -306,6 +307,7 @@ void BulletTypeExt::Serialize(T& Stm)
 		.Process(this->ClusterScatter_Max)
 		.Process(this->BallisticScatter_Min)
 		.Process(this->BallisticScatter_Max)
+		.Process(this->BallisticScatter_Physical)
 		.Process(this->SubjectToLand)
 		.Process(this->SubjectToLand_Detonate)
 		.Process(this->SubjectToWater)

@@ -132,6 +132,11 @@ DEFINE_HOOK(0x4688A9, BulletClass_Unlimbo_Obstacles, 0x6)
 	GET(CoordStruct const* const, sourceCoords, EDI);
 	REF_STACK(CoordStruct, targetCoords, STACK_OFFSET(0x54, -0x10));
 
+	// BallisticScatter.Physical: draw the flight-path offset once, here. This is the first point of
+	// the launch that has both TargetCoords (the target centre) and SourceCoords written, and the
+	// offset must not be drawn anywhere that runs every frame.
+	BulletExt::InitializePhysicalScatter(pThis);
+
 	// Jul 5, 2025 - Starkku: Borrowing this hook for a parabomb check instead of adding a new one.
 	if (pThis->HasParachute)
 	{

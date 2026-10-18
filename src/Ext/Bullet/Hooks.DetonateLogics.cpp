@@ -690,6 +690,11 @@ static bool IsDetonationScatterEligible(BulletClass* const pBullet)
 	auto const pType = pBullet->Type;
 	auto const pTypeExt = BulletTypeExt::Fetch(pType);
 
+	// A projectile that scatters its whole flight path already picked its impact point at launch;
+	// scattering the burst point too would draw two independent offsets and make Max meaningless.
+	if (BulletExt::Fetch(pBullet)->PhysicalScatterActive)
+		return false;
+
 	// Only projectiles that explicitly wrote a scatter interval take part.
 	if (!pTypeExt->BallisticScatter_Min.isset() && !pTypeExt->BallisticScatter_Max.isset())
 		return false;

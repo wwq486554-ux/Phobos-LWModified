@@ -170,6 +170,12 @@ public:
 	Nullable<Leptons> BallisticScatter_Min;
 	Nullable<Leptons> BallisticScatter_Max;
 
+	// BallisticScatter.Physical: upgrade the burst-point scatter above into a real ballistic
+	// offset. An engine-guided projectile (ROT > 0) then flies to "target centre + offset" and
+	// goes off there, instead of only exploding beside a centre hit. Unset keeps the old
+	// burst-point-only behaviour unchanged.
+	Valueable<bool> BallisticScatter_Physical;
+
 	BulletTypeExt(BulletTypeClass* OwnerObject) : ObjectTypeExt(OwnerObject)
 		, Armor {}
 		, Interceptable {}
@@ -237,6 +243,7 @@ public:
 		, ClusterScatter_Max { Leptons(512) }
 		, BallisticScatter_Min {}
 		, BallisticScatter_Max {}
+		, BallisticScatter_Physical { false }
 		, SubjectToLand {}
 		, SubjectToLand_Detonate { true }
 		, SubjectToWater {}

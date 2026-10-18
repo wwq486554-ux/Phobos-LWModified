@@ -846,6 +846,67 @@ CoordStruct BulletExt::GetScatteredCoord(const CoordStruct& baseCoord, const Coo
 	return result;
 }
 
+// BallisticScatter.Physical: does this shot scatter its flight path instead of only its burst
+// point? It needs an explicitly written scatter interval (the same implicit gate as the burst
+// point path), an engine-guided projectile (ROT > 0) that is neither Arcing nor Inviso (both
+// already take an engine scatter path) and no Phobos trajectory (which solves its own aim point).
+bool BulletExt::IsPhysicalScatterEligible(BulletClass* const pBullet)
+{
+	auto const pType = pBullet->Type;
+
+	if (!pType)
+		return false;
+
+	auto const pTypeExt = BulletTypeExt::Fetch(pType);
+
+	if (!pTypeExt->BallisticScatter_Physical.Get())
+		return false;
+
+	if (!pTypeExt->BallisticScatter_Min.isset() && !pTypeExt->BallisticScatter_Max.isset())
+		return false;
+
+	if (pType->ROT <= 0 || pType->Arcing || pType->Inviso)
+		return false;
+
+	return !BulletExt::HasTrajectory(pType);
+}
+
+// BallisticScatter.Physical: draw the launch-time offset the missile will fly to. Unlimbo has
+// already written the target centre into TargetCoords and the firing point into SourceCoords when
+// this runs. The offset comes from the synchronized random stream exactly like every other scatter
+// path, so both clients pick the same point and then only read it.
+void BulletExt::InitializePhysicalScatter(BulletClass* const pBullet)
+{
+	auto const pExt = BulletExt::Fetch(pBullet);
+
+	if (pExt->PhysicalScatterActive || !IsPhysicalScatterEligible(pBullet))
+		return;
+
+	CoordStruct const base = pBullet->TargetCoords;
+	CoordStruct scattered = BulletExt::GetScatteredCoord(base, pBullet->SourceCoords, base - pBullet->SourceCoords, pBullet->Type, pBullet->WeaponType);
+
+	// The aim point has to stay inside the map: a projectile moved to an illegal coordinate is removed
+	// by the engine without any explosion (mode 2), so a shot scattered past the map edge would
+	// silently disappear. Only the aim point is clamped, never the offset itself - a scatter limit is
+	// not intended here.
+	auto const& bounds = MapClass::Instance.MapCoordBounds;
+	auto const clampToCells = [](const int value, const int lowCell, const int highCell)
+	{
+		const int low = (Math::min(lowCell, highCell) + 1) * Unsorted::LeptonsPerCell + Unsorted::LeptonsPerCell / 2;
+		const int high = (Math::max(lowCell, highCell) - 1) * Unsorted::LeptonsPerCell + Unsorted::LeptonsPerCell / 2;
+
+		return Math::clamp(value, low, high);
+	};
+
+	scattered.X = clampToCells(scattered.X, bounds.Left, bounds.Right);
+	scattered.Y = clampToCells(scattered.Y, bounds.Top, bounds.Bottom);
+
+	pExt->PhysicalScatterOffset = scattered - base;
+	pExt->PhysicalScatterOffset.Z = 0;
+	pExt->PhysicalScatterAim = scattered;
+	pExt->PhysicalScatterActive = true;
+}
+
 CoordStruct BulletExt::GetTargetCoordsForFiring(BulletClass* pBullet)
 {
 	if (pBullet->Type->Inviso && pBullet->Type->FlakScatter)
@@ -953,6 +1014,9 @@ void BulletExt::Serialize(T& Stm)
 		.Process(this->DisperseCycle)
 		.Process(this->DisperseTimer)
 		.Process(this->SweepFireAim)
+		.Process(this->PhysicalScatterOffset)
+		.Process(this->PhysicalScatterAim)
+		.Process(this->PhysicalScatterActive)
 		;
 }
 

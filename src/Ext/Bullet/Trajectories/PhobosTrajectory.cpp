@@ -1001,6 +1001,54 @@ DEFINE_HOOK(0x4677D3, BulletClass_Update_TrajectoriesDetonateUpdate, 0x5)
 			return Detonate;
 		}
 	}
+	else if (pExt->PhysicalScatterActive && pThis->Data.ArmTimer.Expired())
+	{
+		// BallisticScatter.Physical: the shot was aimed at "target centre + offset" at launch and the
+		// guidance hook steers it there every frame, so the engine's own detonation rules - built
+		// around the target centre - must not decide when it goes off. Put it down on the frame whose
+		// flight path passes closest to the aim point; a segment test (rather than a plain distance) is
+		// what keeps a fast projectile from jumping over the point between two frames.
+		auto const& scatterAim = pExt->PhysicalScatterAim;
+		auto const& velocity = pThis->Velocity;
+		auto const toAim = scatterAim - position;
+
+		double const speedSquared = velocity.X * velocity.X + velocity.Y * velocity.Y + velocity.Z * velocity.Z;
+		double const projection = speedSquared > 0.0
+			? (toAim.X * velocity.X + toAim.Y * velocity.Y + toAim.Z * velocity.Z) / speedSquared
+			: -1.0;
+
+		// Closest point to the aim point on this frame's path: 0 = where the frame started, 1 = where
+		// it ended (the position the engine moved the bullet to).
+		CoordStruct closest = position;
+
+		if (projection >= 1.0)
+		{
+			closest.X += static_cast<int>(velocity.X);
+			closest.Y += static_cast<int>(velocity.Y);
+			closest.Z += static_cast<int>(velocity.Z);
+		}
+		else if (projection > 0.0)
+		{
+			closest.X += static_cast<int>(velocity.X * projection);
+			closest.Y += static_cast<int>(velocity.Y * projection);
+			closest.Z += static_cast<int>(velocity.Z * projection);
+		}
+
+		double const closestDistance = closest.DistanceFrom(scatterAim);
+		double const step = Math::sqrt(speedSquared);
+
+		if (projection <= 1.0 && closestDistance <= 32.0)
+		{
+			pThis->SetLocation(MapClass::Instance.CoordinatesLegal(closest) ? closest : scatterAim);
+			return Detonate;
+		}
+
+		if (projection < 0.0 && position.DistanceFrom(scatterAim) <= step)
+		{
+			pThis->SetLocation(MapClass::Instance.CoordinatesLegal(position) ? position : scatterAim);
+			return Detonate;
+		}
+	}
 	else if (pExt->Status & (TrajectoryStatus::Detonate | TrajectoryStatus::Vanish))
 	{
 		pThis->SetLocation(position);

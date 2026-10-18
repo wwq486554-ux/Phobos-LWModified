@@ -190,6 +190,49 @@ DEFINE_HOOK(0x4668BD, BulletClass_AI_Interceptor_InvisoSkip, 0x6)
 	return 0;
 }
 
+// BallisticScatter.Physical: steer an engine-guided missile at "target centre + offset" for its
+// whole flight instead of at the target centre. The engine has just worked out this frame's aim
+// point in [esp+0x30] (target centre, or TargetCoordOffset for buildings) and is about to turn it
+// into a steering direction, so adding the fixed world-space offset here is what makes the missile
+// really fly to the scattered point. The stolen instruction (6 bytes) has to be replayed by hand:
+// it loads RulesClass::Instance into ecx.
+DEFINE_HOOK(0x466BAF, BulletClass_AI_PhysicalScatterAim, 0x6)
+{
+	enum { Continue = 0x466BB5 };
+
+	GET(BulletClass*, pThis, EBP);
+
+	if (auto const pExt = BulletAITemp::ExtData)
+	{
+		if (pExt->PhysicalScatterActive)
+		{
+			REF_STACK(CoordStruct, aim, 0x30);
+
+			if (pThis->Target)
+			{
+				aim.X += pExt->PhysicalScatterOffset.X;
+				aim.Y += pExt->PhysicalScatterOffset.Y;
+			}
+			else
+			{
+				// Target lost mid-flight: the engine now aims at the global null coordinate, so keep
+				// flying at the point the missile was already steering at.
+				aim = pExt->PhysicalScatterAim;
+			}
+
+			pExt->PhysicalScatterAim = aim;
+
+			// Let the engine's proximity fuse work around the scattered point instead of around the
+			// target centre; it reads both of these.
+			pThis->Data.Location = aim;
+			pThis->Data.Distance = static_cast<int>(pThis->Location.DistanceFrom(aim));
+		}
+	}
+
+	R->ECX(reinterpret_cast<DWORD>(RulesClass::Instance));
+	return Continue;
+}
+
 #pragma region Gravity
 
 #define APPLYGRAVITY(pType)\
@@ -411,11 +454,23 @@ constexpr bool CheckTrajectoryCanNotAlwaysSnap(const TrajectoryFlag flag)
 
 DEFINE_HOOK(0x467CCA, BulletClass_AI_TargetSnapChecks, 0x6)
 {
-	enum { SkipChecks = 0x467CDE };
+	enum { SkipChecks = 0x467CDE, Detonate = 0x467E53 };
 
 	GET(BulletClass*, pThis, EBP);
 
 	auto const pType = pThis->Type;
+
+	// BallisticScatter.Physical: the engine's own target attraction would pull the shot back onto
+	// the target centre and erase the scattered aim point, so a physically scattered missile is
+	// set off at the coordinate it has already been moved to (0x467B9E) instead.
+	if (auto const pExt = BulletAITemp::ExtData)
+	{
+		if (pExt->PhysicalScatterActive)
+		{
+			R->EAX(pType);
+			return Detonate;
+		}
+	}
 
 	// Do not require Airburst=no to check target snapping for Inviso / Trajectory=Straight projectiles
 	if (pType->Inviso)
@@ -444,6 +499,11 @@ DEFINE_HOOK(0x468E61, BulletClass_Explode_TargetSnapChecks1, 0x6)
 	auto const pExt = BulletExt::Fetch(pThis);
 
 	if (pExt->IsInstantDetonation)
+		return SkipChecks;
+
+	// BallisticScatter.Physical: the impact point was already chosen at launch, so never snap the
+	// warhead back onto the target coordinates (this jump also covers the air <128 snap below).
+	if (pExt->PhysicalScatterActive)
 		return SkipChecks;
 
 	auto const pType = pThis->Type;
@@ -477,6 +537,11 @@ DEFINE_HOOK(0x468E9F, BulletClass_Explode_TargetSnapChecks2, 0x6)
 	auto const pExt = BulletExt::Fetch(pThis);
 
 	if (pExt->IsInstantDetonation)
+		return SkipChecks;
+
+	// BallisticScatter.Physical: the impact point was already chosen at launch, so never snap the
+	// warhead back onto the target coordinates (same reasoning as the earlier snap gate).
+	if (pExt->PhysicalScatterActive)
 		return SkipChecks;
 
 	auto const pType = pThis->Type;

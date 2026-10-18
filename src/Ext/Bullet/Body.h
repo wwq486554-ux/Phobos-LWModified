@@ -99,6 +99,14 @@ public:
 	int DisperseCycle;
 	CDTimerClass DisperseTimer;
 
+	// BallisticScatter.Physical state. The offset is drawn once, at launch, from the synchronized
+	// random stream and is a fixed world-space XY offset from the live target centre. Aim is the
+	// point the missile is currently steering at; it keeps its last value when the target is lost,
+	// so the projectile still flies to (and detonates at) the scattered point.
+	CoordStruct PhysicalScatterOffset;
+	CoordStruct PhysicalScatterAim;
+	bool PhysicalScatterActive;
+
 	BulletExt(BulletClass* OwnerObject) : ObjectExt(OwnerObject)
 		, TypeExtData { nullptr }
 		, FirerHouse { nullptr }
@@ -140,6 +148,9 @@ public:
 		, DisperseCount { 0 }
 		, DisperseCycle { 0 }
 		, DisperseTimer {}
+		, PhysicalScatterOffset { CoordStruct::Empty }
+		, PhysicalScatterAim { CoordStruct::Empty }
+		, PhysicalScatterActive { false }
 	{}
 
 	virtual ~BulletExt() override;
@@ -400,6 +411,12 @@ public:
 	{
 		return BulletTypeExt::Fetch(pType)->TrajectoryType.get() != nullptr;
 	}
+
+	// BallisticScatter.Physical: gate and one-shot launch-time offset draw for a projectile that
+	// scatters its flight path instead of only its burst point. Both helpers are no-ops for a
+	// projectile that did not opt in.
+	static bool IsPhysicalScatterEligible(BulletClass* pBullet);
+	static void InitializePhysicalScatter(BulletClass* pBullet);
 
 	// Scatter an explicit aim coordinate the same way the Phobos trajectory path does
 	// (path 3): draw a radius from the projectile's own interval, shape it with Sigma,

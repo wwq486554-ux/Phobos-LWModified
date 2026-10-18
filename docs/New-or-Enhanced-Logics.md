@@ -5416,6 +5416,14 @@ SweepFire.InfantryFireAnim=true ; boolean
   - The reference point is the engine's own final burst coordinate, not a fresh lookup of the target: a `Ranged` early detonation explodes where it happened instead of teleporting onto the target, and a burst point the engine has already snapped is kept.
   - With `Cluster > 1` the centre is offset first and the engine's own `ClusterScatter` is layered on top of that centre, so the extra detonations spread around the offset point instead of the target.
   - The projectile body still flies to the target centre; only the burst point moves. Large offsets therefore look like "it hit the target and exploded beside it". Moving the body too would mean rewriting the engine's homing target source, which is deliberately not done.
+- `BallisticScatter.Physical=yes` upgrades that burst-point scatter into a real ballistic offset: the missile now flies to `target centre + offset` and goes off there, instead of flying to the centre and exploding beside it.
+  - The offset is drawn once, on the launch frame, from the same interval and shaping as the burst-point path (`BallisticScatter.Min/Max`, `Sigma`, `Aspect`, `Divergence`, and the same distance ramp), using the synchronized random number generator, so both clients pick the same point and only read it afterwards.
+  - The gate is the interval plus `ROT > 0` (the engine's own guidance has to exist), `Arcing=no`, `Inviso=no` and no `Trajectory=`. A projectile that does not write the key keeps the burst-point-only behaviour bit for bit, and one that writes the key but fails the gate (for example `ROT=0`) falls back to it as well. No new scatter parameter keys are involved.
+  - The offset is a fixed world-space XY displacement from the live target centre, so the missile tracks a moving target while keeping the same offset; the height is the one the engine aimed at, which is the target centre height. When the target dies the missile keeps flying to the last aim point and detonates there.
+  - Anti-air is not excluded: against an air target the missile air-bursts beside the aircraft at the offset point, and the vanilla rule that a detonation above the ground damages air units still applies. A large offset can miss the aircraft, or a fast aircraft can outrun the missile before it crosses the aim point - that is the scatter behaving as configured.
+  - The impact point is enforced by the feature itself: the frame whose flight segment passes closest to the aim point is where the projectile goes off, so the engine's target-centre detonation rules cannot pull the shot back. The burst-point scatter above is skipped for these projectiles, so an offset is never drawn twice.
+  - The aim point is clamped into the map (one cell inwards, cell centres) at launch, because the engine silently removes a projectile moved to an illegal coordinate without exploding it. This is a map safety clamp, not a scatter limit: the offset itself is not capped.
+  - These projectiles gain three save fields, so saves from before this key are incompatible - start a new game after updating. Interceptors are not excluded, but the offset lowers interception reliability, so do not enable it on intercepting projectiles; SweepFire shots keep the aim point they were launched at, so enabling it on a sweeping projectile is not recommended either.
 - `Trajectory=Missile` keeps its aim offset through the final snap. `ActualTrajectory::OnPreDetonate` used to snap onto the target centre whenever the projectile came within `Trajectory.TargetSnapDistance`, which drew a scatter radius smaller than the snap radius straight back onto the centre. The snap now targets `TargetCoords + offset`: `BallisticScatter.Min/Max` survives, a fixed `Trajectory.OffsetCoord` survives, and the snap still does its job of keeping a near miss from overshooting the target.
   - `Trajectory.TargetSnapDistance` keeps working - `0` still disables the snap completely - but it no longer has to be set to `0` just to keep the scatter.
   - `Trajectory.Missile.UniqueCurve=yes` now honours the offset as well. That branch skipped the normal initialisation entirely, so neither a fixed `Trajectory.OffsetCoord` nor a random scatter was ever computed for it; both now go through the same helper as the ordinary branch.
@@ -5452,6 +5460,16 @@ BallisticScatter.Max=2
 Sigma=1.0                       ; optional
 Aspect=1.0                      ; optional
 Divergence=1.0                  ; optional, linear; unset uses [General] Divergence
+```
+
+A vanilla homing missile can also fly to the offset point itself instead of only exploding beside the target centre:
+```ini
+[GODSBANEFRAGPS]                ; Projectile
+ROT=100
+Inaccurate=yes
+BallisticScatter.Min=1          ; the interval is still the implicit gate
+BallisticScatter.Max=2
+BallisticScatter.Physical=yes   ; the projectile really flies to "target centre + offset"
 ```
 
 A `Trajectory=Missile` projectile uses the same keys, and the snap no longer has to be disabled:

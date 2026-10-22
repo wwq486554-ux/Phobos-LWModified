@@ -1067,6 +1067,16 @@ DEFINE_HOOK(0x4899DA, MapClass_DamageArea_DamageUnderGround, 0x7)
 // exactly AffectsOwner / AffectsAllies / AffectsEnemies / AffectsNeutral, the same
 // filter the warhead's other per-target effects go through.
 //
+// One hard constraint on top of that filter (2026-10-22): a shot never warps the techno
+// that fired it. TemporalClass::Fire's tail lets go of the target's own TemporalImUsing
+// instance; when that instance is the very slot being fired - the target is the slot's
+// owner, i.e. the shooter itself - the tail clears the Target it has just set and then
+// dereferences the null (0x71B173, the address gamemd.edb files under "death weapon that
+// uses a Temporal=yes warhead", which is just one of the ways to reach it). The constraint
+// is per shot and by bullet owner only: allies - units carrying the same warhead included -
+// are still valid victims exactly when the warhead's own house filter accepts them.
+// See IsSelf, the guard in Fire and the direct-target guard in the 0x4694BB hook.
+//
 // CellSpread = 0 leaves everything to vanilla: both hooks below fall through untouched.
 
 namespace TemporalCellSpread
@@ -1079,6 +1089,13 @@ namespace TemporalCellSpread
 		const auto pWH = pBullet->WH;
 
 		return pWH && pWH->Temporal && pWH->CellSpread > 0.0f;
+	}
+
+	// The shooter is never a victim of its own shot (see the region comment). Kept in one place so
+	// every delivery route and the engine-direct-target guard answer that question the same way.
+	bool IsSelf(TechnoClass* pOwner, TechnoClass* pTarget)
+	{
+		return pOwner && pTarget == pOwner;
 	}
 
 	// Whether the shot has to warp this victim itself. A unit that is already being warped - by
@@ -1101,6 +1118,11 @@ namespace TemporalCellSpread
 	// again instead of being kept registered and warping nobody.
 	void Fire(TechnoClass* pOwner, TechnoClass* pTarget)
 	{
+		// Hard constraint: never warp the techno that fired the shot (see IsSelf). Enforced here as
+		// well as in GetVictims so that no future delivery route can bypass it.
+		if (IsSelf(pOwner, pTarget))
+			return;
+
 		auto const pInstance = GameCreate<TemporalClass>(pOwner);
 		pInstance->Fire(pTarget);
 
@@ -1120,6 +1142,11 @@ namespace TemporalCellSpread
 			pBullet->GetCoords(), pWH->CellSpread, true, pWHExt->CellSpread_Cylinder))
 		{
 			if (!pTarget || !pTarget->IsAlive || pTarget->InLimbo || pTarget->IsSinking)
+				continue;
+
+			// Hard constraint: the shooter is never a victim of its own shot (see IsSelf). Keeping
+			// it out here also keeps its own warp out of the shot's pooled plan and reload hold.
+			if (IsSelf(pOwner, pTarget))
 				continue;
 
 			if (!pWHExt->CanTargetHouse(pHouse, pTarget))
@@ -1445,6 +1472,22 @@ DEFINE_HOOK(0x4694BB, BulletClass_Detonate_EnsureTemporal, 0x6)
 
 		if (!pOwner->TemporalImUsing)
 			pOwner->TemporalImUsing = GameCreate<TemporalClass>(pOwner);
+	}
+
+	// Hard constraint: a shot never warps the techno that fired it (see TemporalCellSpread::IsSelf).
+	// The engine is about to call TemporalClass::Fire on this techno's own slot with pDirect; if the
+	// unit it picked is the shooter itself, that Fire would reach its tail, let go of the target's
+	// own TemporalImUsing - the very slot being fired - clear the Target it has just set and
+	// dereference the null (0x71B173, see the region comment). Skip the engine's call and deliver the
+	// rest of a CellSpread shot locally, exactly like the no-target route below. Nothing legitimate
+	// fires a Temporal warhead at its own owner, so nothing is lost by treating it as targetless.
+	if (TemporalCellSpread::IsSelf(pOwner, pDirect))
+	{
+		if (TemporalCellSpread::Applies(pThis, pOwner))
+			TemporalCellSpread::DeliverAll(pThis, pOwner, true);
+
+		R->ESP(R->ESP() + 4);
+		return 0x4694C6;
 	}
 
 	if (!TemporalCellSpread::Applies(pThis, pOwner))

@@ -156,11 +156,19 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 	// instance can end up with a target that another warp took over (or that is gone entirely -
 	// the chain that erases it does not clear a helper's target), and LetGo on such an instance
 	// dereferences a pointer it does not own.
+	//
+	// The victim must also not be the caster itself, and its TemporalImUsing must not be the slot
+	// being handed to. TemporalClass::Fire's tail lets go of the target's own TemporalImUsing; for
+	// the shooter that is the very slot this Fire is running on, so the tail clears the Target it
+	// has just set and dereferences the null (0x71B173, 2026-10-22 crash). The delivery side never
+	// builds such a warp anymore (it excludes the shooter - see the hard constraint in
+	// Ext/Bullet/Hooks.DetonateLogics.cpp); this is the last stop in case a future route does.
 	if (const auto pCaster = pThis->Owner;
 		pCaster && pThis->Target && pThis->WarpRemaining > 0 && pThis != pCaster->TemporalImUsing
-		&& pThis->Target->TemporalTargetingMe == pThis)
+		&& pThis->Target != pCaster && pThis->Target->TemporalTargetingMe == pThis)
 	{
-		if (const auto pSlot = pCaster->TemporalImUsing; pSlot && !pSlot->Target)
+		if (const auto pSlot = pCaster->TemporalImUsing;
+			pSlot && !pSlot->Target && pThis->Target->TemporalImUsing != pSlot)
 		{
 			const auto pVictim = pThis->Target;
 			const int warpRemaining = pThis->WarpRemaining;

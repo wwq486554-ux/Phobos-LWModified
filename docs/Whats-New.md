@@ -864,6 +864,7 @@ HideShakeEffects=false           ; boolean
 - Fixed an issue where `OmniFire` was ineffective on buildings with `Turret=yes` (by FlyStar)
 - Fixed an issue where setting a production building as `Primary` could cause it to enter an unload state (by FlyStar)
 - Fixed the issue of significant lagging caused by frequent lighting updates due to the accumulation of a large amount of radsite in a short time (by NetsuNegi)
+- [Large radial indicator drawing](Fixed-or-Improved-Logics.md#large-radial-indicator-drawing) (by laowang)
 
 #### Phobos fixes:
 - Hardened the `OpenTopped` range bonus hook: a `Transporter` that is no longer a live object now falls back to the plain range bonus instead of dereferencing a null `TypeExtData` at +0x18. Defensive, not a verified fix - the crash that motivated it came from the first `SuddenDeath` implementation (which destroyed objects inside the damage pipeline) and has not been observed since that feature was rewritten (by laowang)

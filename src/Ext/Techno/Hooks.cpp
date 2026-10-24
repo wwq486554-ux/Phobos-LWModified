@@ -257,8 +257,20 @@ DEFINE_HOOK(0x71A88D, TemporalClass_AI, 0x8)
 	{
 		// The vanilla erase decision, i.e. a warp with no record of ours ending on its own counter
 		// (CellSpread.TemporalEraseMode=perunit without Temporal.Duration lands here).
-		TemporalTemp::ScheduledEraseFrame = Unsorted::CurrentFrame;
-		TemporalTemp::ScheduledEraseVictim = pThis->Target->UniqueID;
+		//
+		// Target can already be null at this point. A frozen victim that dies or leaves the map is
+		// cleared only on this instance's side by the engine's expired-pointer handler (0x71AB60):
+		// it drops Target and the chain without a LetGo, and does not touch the victim's own
+		// TemporalTargetingMe/BeingWarpedOut. The victim object then keeps ticking this instance
+		// from its own AI until it is gone, while this instance counts down with nothing to warp.
+		// Vanilla reaches 0x71A895 in that state and cleans up there (its first instruction tests
+		// Target for null), so the record must only be stamped when there is a victim to name.
+		// Crashing here was snapshot-20261022-213406 (Hooks.cpp:261 null Target dereference).
+		if (const auto pTarget = pThis->Target)
+		{
+			TemporalTemp::ScheduledEraseFrame = Unsorted::CurrentFrame;
+			TemporalTemp::ScheduledEraseVictim = pTarget->UniqueID;
+		}
 
 		return 0x71A895;
 	}

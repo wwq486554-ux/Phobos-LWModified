@@ -483,8 +483,11 @@ public:
 	// [slot][mount] FLHs of the group lists. Empty for slots without a group.
 	std::vector<std::vector<CoordStruct>> ExtraWeapon_GroupFLHs;
 	// Cached "any mount list is configured" answer, so the per-frame update of every techno
-	// in the game can early-out on a single flag instead of scanning the lists. Recomputed
-	// by LoadFromINIFile for every type; deliberately not serialized.
+	// in the game can early-out on a single flag instead of scanning the lists. It is derived
+	// from the lists above, so it is not serialized: LoadFromINIFile computes it, and a
+	// savegame load recomputes it after the extension has been restored from its stream
+	// (see RecomputeExtraWeaponConfigured) - type extensions are rebuilt from the stream on
+	// load, so an INI-only field would otherwise fall back to its constructor default.
 	bool ExtraWeapon_Configured;
 
 	TechnoTypeExt(TechnoTypeClass* OwnerObject) : ObjectTypeExt(OwnerObject)
@@ -915,6 +918,10 @@ public:
 	const std::vector<WeaponTypeClass*>& GetExtraWeaponGroup(int slot, bool elite) const;
 	// Art FLHs that belong to the same group as GetExtraWeaponGroup.
 	const std::vector<CoordStruct>& GetExtraWeaponGroupFLHs(int slot) const;
+	// Recomputes the ExtraWeapon_Configured early-out cache from the mount lists. Called at
+	// the end of every INI read and again after a savegame load has restored the extension's
+	// fields from its stream (the INI is not re-read then).
+	void RecomputeExtraWeaponConfigured();
 
 	void UpdateAdditionalAttributes();
 

@@ -919,6 +919,35 @@ const std::vector<CoordStruct>& TechnoTypeExt::GetExtraWeaponGroupFLHs(int slot)
 	return this->ExtraWeapon_GroupFLHs[slot];
 }
 
+void TechnoTypeExt::RecomputeExtraWeaponConfigured()
+{
+	this->ExtraWeapon_Configured = !this->ExtraWeapon.empty() || !this->ExtraWeapon_Elite.empty();
+
+	if (!this->ExtraWeapon_Configured)
+	{
+		for (const auto& group : this->ExtraWeapon_Groups)
+		{
+			if (!group.empty())
+			{
+				this->ExtraWeapon_Configured = true;
+				break;
+			}
+		}
+	}
+
+	if (!this->ExtraWeapon_Configured)
+	{
+		for (const auto& group : this->ExtraWeapon_EliteGroups)
+		{
+			if (!group.empty())
+			{
+				this->ExtraWeapon_Configured = true;
+				break;
+			}
+		}
+	}
+}
+
 void TechnoTypeExt::ParseBurstFLHs(INI_EX& exArtINI, const char* pArtSection,
 	std::vector<std::vector<CoordStruct>>& nFLH, std::vector<std::vector<CoordStruct>>& nEFlh, const char* pPrefixTag)
 {
@@ -1705,31 +1734,7 @@ void TechnoTypeExt::LoadFromINIFile(CCINIClass* const pINI)
 	}
 
 	// Cache the per-frame early-out answer.
-	this->ExtraWeapon_Configured = !this->ExtraWeapon.empty() || !this->ExtraWeapon_Elite.empty();
-
-	if (!this->ExtraWeapon_Configured)
-	{
-		for (const auto& group : this->ExtraWeapon_Groups)
-		{
-			if (!group.empty())
-			{
-				this->ExtraWeapon_Configured = true;
-				break;
-			}
-		}
-	}
-
-	if (!this->ExtraWeapon_Configured)
-	{
-		for (const auto& group : this->ExtraWeapon_EliteGroups)
-		{
-			if (!group.empty())
-			{
-				this->ExtraWeapon_Configured = true;
-				break;
-			}
-		}
-	}
+	this->RecomputeExtraWeaponConfigured();
 
 	this->Promote_VeteranAnimation.Read(exINI, pSection, "Promote.VeteranAnimation");
 	this->Promote_EliteAnimation.Read(exINI, pSection, "Promote.EliteAnimation");
@@ -2510,6 +2515,11 @@ void TechnoTypeExt::LoadFromStream(PhobosStreamReader& Stm)
 {
 	ObjectTypeExt::LoadFromStream(Stm);
 	this->Serialize(Stm);
+
+	// A savegame load rebuilds the type extensions from this stream instead of re-reading
+	// the INI, so derived caches have to be rebuilt here too or they keep their constructor
+	// defaults and silently disable the features that depend on them.
+	this->RecomputeExtraWeaponConfigured();
 }
 
 void TechnoTypeExt::SaveToStream(PhobosStreamWriter& Stm)

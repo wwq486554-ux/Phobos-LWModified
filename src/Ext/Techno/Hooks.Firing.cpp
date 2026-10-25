@@ -1042,17 +1042,12 @@ static void ApplyROFCurve(TechnoClass* pThis, WeaponTypeClass* pWeapon, int& rea
 	if (!pExt || !pExtW)
 		return;
 
-	// No curve, or a curve that cannot run: drop the state so a later weapon on the same unit
-	// starts from scratch, and leave the engine's value alone.
+	// No curve, or a curve that cannot run: leave the engine's value alone and leave the curve
+	// state alone too. The state is per weapon, so a weapon without a curve must not reset the
+	// chains of the other weapons the techno carries - that would wipe a fallback weapon's
+	// spin-up every time the primary weapon fires.
 	if (!pExtW->ROFCurve_IsUsable)
-	{
-		pExt->ROFCurveWeapon = nullptr;
-		pExt->ROFCurveProgress = 0.0;
-		pExt->ROFCurveLastRearm = 0;
-		pExt->ROFCurveLastFrame = 0;
-
 		return;
-	}
 
 	// A delay below one frame is not a delay this weapon can be paced by, and scaling it would
 	// turn an already unusable value into a faster one. Leave it exactly as it is.
@@ -1072,14 +1067,14 @@ static void ApplyROFCurve(TechnoClass* pThis, WeaponTypeClass* pWeapon, int& rea
 	// the next sweep's first shot part of the same chain.
 	if (pExtW->IsSweepFireEnabled())
 	{
-		pExt->ROFCurveLastRearm = rearmDelay;
+		pExt->RecordROFCurveRearm(pWeapon, rearmDelay);
 
 		return;
 	}
 
 	rearmDelay = Math::max(1, static_cast<int>(std::lround(rearmDelay * curveRatio)));
 
-	pExt->ROFCurveLastRearm = rearmDelay;
+	pExt->RecordROFCurveRearm(pWeapon, rearmDelay);
 }
 
 // The two instructions that take the address of RearmTimer, one per branch of Fire_At:

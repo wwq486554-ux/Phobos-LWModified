@@ -1257,6 +1257,10 @@ namespace
 // ROFCurve.Ramp frames, eased by ROFCurve.Power. Neither end has to be the slow one: the shape
 // is symmetric, so a weapon may just as well fire fastest first and slow down. The value is
 // returned as a ratio to the weapon's own ROF, which is exactly how the reload hook applies it.
+//
+// Every weapon owns its own chain of spin-up state (ROFCurveChain), so the helpers below only
+// ever see the chain of the weapon they were handed - a shot of one weapon never touches another
+// weapon's progress. A weapon without a usable curve has no chain at all.
 namespace
 {
 	double GetROFCurveRofRatio(double progress, WeaponTypeClass* pWeapon, WeaponTypeExt* pWeaponExt)
@@ -1267,6 +1271,28 @@ namespace
 
 		return curveRof / static_cast<double>(Math::max(pWeapon->ROF, 1));
 	}
+
+	ROFCurveChain* FindROFCurveChain(std::vector<ROFCurveChain>& chains, WeaponTypeClass* pWeapon)
+	{
+		for (auto& chain : chains)
+		{
+			if (chain.Weapon == pWeapon)
+				return &chain;
+		}
+
+		return nullptr;
+	}
+
+	const ROFCurveChain* FindROFCurveChain(const std::vector<ROFCurveChain>& chains, WeaponTypeClass* pWeapon)
+	{
+		for (auto const& chain : chains)
+		{
+			if (chain.Weapon == pWeapon)
+				return &chain;
+		}
+
+		return nullptr;
+	}
 }
 
 double TechnoExt::StepROFCurve(WeaponTypeClass* pWeapon)
@@ -1276,16 +1302,20 @@ double TechnoExt::StepROFCurve(WeaponTypeClass* pWeapon)
 
 	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
 
-	// No curve, or one that cannot run: drop the state so a later weapon on the same unit starts
-	// from scratch.
+	// A weapon without a usable curve owns no chain and must not touch the chains of the other
+	// weapons the techno carries. That is what used to reset the spin-up of a fallback weapon
+	// every time the primary weapon fired; each weapon now keeps its own progress.
 	if (!pWeaponExt || !pWeaponExt->ROFCurve_IsUsable)
-	{
-		this->ROFCurveWeapon = nullptr;
-		this->ROFCurveProgress = 0.0;
-		this->ROFCurveLastRearm = 0;
-		this->ROFCurveLastFrame = 0;
-
 		return 1.0;
+
+	ROFCurveChain* pChain = FindROFCurveChain(this->ROFCurveChains, pWeapon);
+	const bool fresh = pChain == nullptr;
+
+	if (fresh)
+	{
+		this->ROFCurveChains.emplace_back();
+		pChain = &this->ROFCurveChains.back();
+		pChain->Weapon = pWeapon;
 	}
 
 	const int now = Unsorted::CurrentFrame;
@@ -1295,40 +1325,55 @@ double TechnoExt::StepROFCurve(WeaponTypeClass* pWeapon)
 	// expire and ordinary scheduling jitter, and firing at a different target does not break
 	// the chain.
 	//
-	// ROFCurveLastRearm is "the gap this chain expects to the next shot" rather than literally
-	// the engine's reload: a feature that paces the weapon over a longer cycle (a Temporal
-	// freeze, which holds the target far beyond the reload) writes its own expectation there,
-	// so its shots still count as one continuous chain.
+	// ROFCurveChain::LastRearm is "the gap this chain expects to the next shot" rather than
+	// literally the engine's reload: a feature that paces the weapon over a longer cycle (a
+	// Temporal freeze, which holds the target far beyond the reload) writes its own expectation
+	// there, so its shots still count as one continuous chain.
 	constexpr int ContinuitySlack = 3;
-	const bool continuing = this->ROFCurveWeapon == pWeapon
-		&& now - this->ROFCurveLastFrame <= this->ROFCurveLastRearm + ContinuitySlack;
+	const bool continuing = !fresh
+		&& now - pChain->LastFrame <= pChain->LastRearm + ContinuitySlack;
 
 	// The gap is how much time actually passed, so the spin-up follows real time when the
 	// engine holds a shot back and the decay follows real idle time when it fires at nothing.
-	const int gap = Math::max(now - this->ROFCurveLastFrame, 0);
+	// A fresh chain starts at the beginning of its curve and never counts as a decay.
+	const int gap = fresh ? 0 : Math::max(now - pChain->LastFrame, 0);
 
 	if (continuing)
 	{
-		this->ROFCurveProgress += static_cast<double>(gap) / pWeaponExt->ROFCurve_Ramp;
+		pChain->Progress += static_cast<double>(gap) / pWeaponExt->ROFCurve_Ramp;
 	}
 	else if (pWeaponExt->ROFCurve_Decay > 0)
 	{
-		this->ROFCurveProgress -= static_cast<double>(gap) / pWeaponExt->ROFCurve_Decay;
+		pChain->Progress -= static_cast<double>(gap) / pWeaponExt->ROFCurve_Decay;
 	}
 	else
 	{
-		this->ROFCurveProgress = 0.0;
+		pChain->Progress = 0.0;
 	}
 
-	this->ROFCurveWeapon = pWeapon;
-	this->ROFCurveLastFrame = now;
-	this->ROFCurveProgress = std::clamp(this->ROFCurveProgress, 0.0, 1.0);
+	pChain->LastFrame = now;
+	pChain->Progress = std::clamp(pChain->Progress, 0.0, 1.0);
 
 	// Reaching the top either holds (Cycle=no) or starts the curve over (Cycle=yes).
-	if (pWeaponExt->ROFCurve_Cycle && this->ROFCurveProgress >= 1.0)
-		this->ROFCurveProgress = 0.0;
+	if (pWeaponExt->ROFCurve_Cycle && pChain->Progress >= 1.0)
+		pChain->Progress = 0.0;
 
-	return GetROFCurveRofRatio(this->ROFCurveProgress, pWeapon, pWeaponExt);
+	return GetROFCurveRofRatio(pChain->Progress, pWeapon, pWeaponExt);
+}
+
+void TechnoExt::RecordROFCurveRearm(WeaponTypeClass* pWeapon, int rearmDelay)
+{
+	if (auto* const pChain = FindROFCurveChain(this->ROFCurveChains, pWeapon))
+		pChain->LastRearm = rearmDelay;
+}
+
+void TechnoExt::ExtendROFCurveRearm(WeaponTypeClass* pWeapon, int framesFromNow)
+{
+	if (auto* const pChain = FindROFCurveChain(this->ROFCurveChains, pWeapon))
+	{
+		const int elapsed = Math::max(Unsorted::CurrentFrame - pChain->LastFrame, 0);
+		pChain->LastRearm = Math::max(pChain->LastRearm, elapsed + Math::max(framesFromNow, 0));
+	}
 }
 
 int TechnoExt::ScaleByROFCurve(int frames, WeaponTypeClass* pWeapon) const
@@ -1341,11 +1386,16 @@ int TechnoExt::ScaleByROFCurve(int frames, WeaponTypeClass* pWeapon) const
 	const auto pWeaponExt = WeaponTypeExt::TryFetch(pWeapon);
 
 	// Only a weapon that has already put this techno on the curve may scale a frame count: the
-	// state belongs to that chain, so a weapon that never fired it is left alone.
-	if (!pWeaponExt || !pWeaponExt->ROFCurve_IsUsable || this->ROFCurveWeapon != pWeapon)
+	// chain belongs to that weapon, so a weapon that never opened one is left alone.
+	if (!pWeaponExt || !pWeaponExt->ROFCurve_IsUsable)
 		return frames;
 
-	const double ratio = GetROFCurveRofRatio(this->ROFCurveProgress, pWeapon, pWeaponExt);
+	const auto* const pChain = FindROFCurveChain(this->ROFCurveChains, pWeapon);
+
+	if (!pChain)
+		return frames;
+
+	const double ratio = GetROFCurveRofRatio(pChain->Progress, pWeapon, pWeaponExt);
 
 	return Math::max(1, static_cast<int>(std::lround(frames * ratio)));
 }
@@ -2616,11 +2666,9 @@ void TechnoExt::BeginTemporalFreezeFor(TechnoClass* pTarget)
 	// shot's freeze is the longer of its damage window and its pooled erase.
 	const int freezeFrames = std::max(duration, eraseAt);
 
-	if (this->ROFCurveWeapon == pWeapon)
-	{
-		const int elapsed = Math::max(Unsorted::CurrentFrame - this->ROFCurveLastFrame, 0);
-		this->ROFCurveLastRearm = Math::max(this->ROFCurveLastRearm, elapsed + freezeFrames + record.Interval);
-	}
+	// Only this weapon's own chain is stretched; the other weapons the techno carries keep
+	// their progress untouched.
+	this->ExtendROFCurveRearm(pWeapon, freezeFrames + record.Interval);
 
 	record.TickRof = std::max(1, static_cast<int>(pWeapon->ROF * this->AE.ROFMultiplier));
 	record.Total = total;

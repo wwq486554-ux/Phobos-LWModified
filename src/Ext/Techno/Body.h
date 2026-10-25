@@ -163,6 +163,18 @@ namespace SweepFireDiag
 	bool FirstTime(int site, const char* pWeaponId);
 }
 
+// Spin-up state of one ROFCurve weapon on one techno. A techno keeps one chain per weapon that
+// has put it on a curve (TechnoExt::ROFCurveChains), so the weapons never interfere: a unit
+// whose ammo logic swaps to a fallback weapon keeps the fallback weapon's curve running across
+// the shots of the primary weapon, and vice versa.
+struct ROFCurveChain
+{
+	WeaponTypeClass* Weapon { nullptr }; // The weapon whose curve this chain belongs to
+	double Progress { 0.0 }; // Position on the curve, 0 (start) .. 1 (end)
+	int LastRearm { 0 }; // Gap the previous shot of this weapon expected to the next one
+	int LastFrame { 0 }; // Frame of the previous shot of this weapon
+};
+
 class TechnoExt : public RadioExt, public Detach::Listener<AirstrikeClass>
 {
 public:
@@ -215,19 +227,20 @@ public:
 	AnimClass* CurrentDelayedFireAnim;
 
 	// --- ROFCurve ---
-	// Transient spin-up state of a ROFCurve weapon. One canister's worth of state: how far
-	// along the curve the current burst of fire has travelled, which weapon it belongs to,
-	// and what the previous shot was handed (its frame, and the effective rearm delay it
+	// Transient spin-up state of the ROFCurve weapons this techno has fired: one chain per
+	// weapon, each remembering how far along its curve the current burst of fire has travelled
+	// and what its previous shot was handed (its frame, and the effective rearm delay it
 	// produced). Together those two tell a continuing burst apart from a paused one.
 	//
-	// Deliberately NOT serialized. It describes a burst of fire in progress, so a save/load
-	// starts the curve over, which is what it looks like anyway. Leaving it out also keeps
-	// the savegame layout of previous builds intact, and both machines of a multiplayer
-	// session zero it from the same save, so it stays in sync.
-	WeaponTypeClass* ROFCurveWeapon;
-	double ROFCurveProgress;
-	int ROFCurveLastRearm;
-	int ROFCurveLastFrame;
+	// One chain per weapon is what makes a multi-weapon techno behave: a unit whose ammo logic
+	// swaps between a primary weapon and a fallback weapon keeps each weapon's spin-up
+	// independent, so firing the plain weapon no longer resets the other weapon's progress.
+	//
+	// Deliberately NOT serialized. The chains describe bursts of fire in progress, so a
+	// save/load starts the curves over, which is what they look like anyway. Leaving them out
+	// also keeps the savegame layout of previous builds intact, and both machines of a
+	// multiplayer session zero them from the same save, so they stay in sync.
+	std::vector<ROFCurveChain> ROFCurveChains;
 
 	// --- TankMakeupKit ---
 	// The look a Mirage-like vehicle took over from a MakesDisguise weapon hit. Vanilla keeps
@@ -497,10 +510,7 @@ public:
 		, TemporalRearmIntervalFrame { 0 }
 		, TemporalLingerSaved { false }
 		, TemporalErasePending { false }
-		, ROFCurveWeapon { nullptr }
-		, ROFCurveProgress { 0.0 }
-		, ROFCurveLastRearm { 0 }
-		, ROFCurveLastFrame { 0 }
+		, ROFCurveChains {}
 		, MakeupDisguise { nullptr }
 		, MakeupHouse { nullptr }
 		, ExtraWeapon_FlatRuntimes {}
@@ -594,14 +604,24 @@ public:
 	// different pace - SweepFire's cooldown between two sweeps, and the interval between two
 	// Temporal freezes - are paced from this file and read the same curve.
 	//
-	// Advances the spin-up state and returns the curve's ROF as a ratio to the weapon's own ROF
-	// (1.0 when there is no usable curve). Calling it twice on one frame is harmless: the second
-	// call sees a zero gap and changes nothing.
+	// Every weapon that carries a usable curve owns its own chain of state; a weapon without a
+	// usable curve owns none and never touches another weapon's chain.
+	//
+	// Advances the spin-up state of this weapon and returns the curve's ROF as a ratio to the
+	// weapon's own ROF (1.0 when there is no usable curve). Calling it twice on one frame is
+	// harmless: the second call sees a zero gap and changes nothing.
 	double StepROFCurve(WeaponTypeClass* pWeapon);
 	// Scales a frame count by the curve that this weapon has already put the techno on. A frame
 	// count that is not a delay (<= 0, i.e. the feature is off) and a weapon without a running
 	// chain are returned untouched.
 	int ScaleByROFCurve(int frames, WeaponTypeClass* pWeapon) const;
+	// Records how long this weapon's chain expects to wait before its next shot. No-op when the
+	// weapon has no chain, i.e. it did not open one with a usable curve.
+	void RecordROFCurveRearm(WeaponTypeClass* pWeapon, int rearmDelay);
+	// Extends that expectation by a cycle that lasts longer than the reload (a Temporal freeze
+	// holds the target far beyond it), counted from this weapon's last shot, so its next shot
+	// still counts as the same chain. No-op when the weapon has no chain.
+	void ExtendROFCurveRearm(WeaponTypeClass* pWeapon, int framesFromNow);
 
 	void InitializeLaserTrails();
 	void InitializeAttachEffects();

@@ -5578,7 +5578,7 @@ Carryall.Allowed=yes         ; boolean, optional - overrides the Organic/NonVehi
 - Every shot is a real projectile: it gets its own muzzle animation, report sound, laser/bolt/beam/particle effect, warhead, armour and `CellSpread` handling and experience. Damage uses the weapon's `Damage` times the unit's current firepower multiplier. Ammo is not consumed, and the engine's own firing events are not raised, so no firing animation, recoil, voice line or `DiscardOn.Firing` attached effect runs for it.
 - The muzzle follows the unit's current turret facing (`HasTurret()`), and the extra weapon never requests a turn of its own. A `Turret=yes` unit therefore fires from its turret and a `BodyWeapon`-locked slot fires along the hull automatically, with no special configuration.
 - Weapons the engine special-cases inside its firing path and that a self-built projectile cannot reproduce - `Spawner`, `DiskLaser`, `IsSonic`, `LimboLaunch`, `Suicide` and `IsMagBeam` - are skipped safely: `debug.log` receives one developer warning per mount and the remaining mounts keep firing.
-- The feature is driven from the existing `TechnoClass::AI` hook, so it adds no new hook addresses, and a type with no `ExtraWeapon` keys costs one cached flag check per frame. The cooldown and burst state of every mount are saved and loaded.
+- The feature is driven from the existing `TechnoClass::AI` hook, so it adds no new hook addresses, and a type with no `ExtraWeapon` keys costs one cached flag check per frame. The cooldown and burst state of every mount are saved and loaded, and the list of configured mount groups is rebuilt when a type extension is loaded from a savegame, so the mounts keep firing in a loaded game.
 
 In `rulesmd.ini`:
 ```ini

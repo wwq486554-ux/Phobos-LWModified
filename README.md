@@ -18,8 +18,8 @@
 > |---|---|
 > | **Based on / 基线** | Phobos `v0.5.0.0-alpha2` (`b1dc830570358315273ce3f958a8846c439c1d7e`) |
 > | **Also integrates / 另整合** | upstream PR [#2060](https://github.com/Phobos-developers/Phobos/pull/2060) **"New trajectory system" — still an unmerged draft.** It reopens [#1582](https://github.com/Phobos-developers/Phobos/pull/1582) by [@CrimRecya](https://github.com/CrimRecya), reopened by [@TaranDahl](https://github.com/TaranDahl). |
-> | **Current version / 当前版本** | `v0.5.0.0-alpha2-pbsnew6` |
-> | **Last updated / 最后更新** | 2026-10-17 |
+> | **Current version / 当前版本** | `v0.5.0.0-alpha2-pbsnew8` |
+> | **Last updated / 最后更新** | 2026-11-12 |
 > | **Releases / 下载** | <https://github.com/wwq486554-ux/Phobos-LWModified/releases> |
 >
 > If a log, crash report or file property mentions `pbsnew`, you are running this
@@ -28,6 +28,23 @@
 >
 > - Upstream project: <https://github.com/Phobos-developers/Phobos>
 > - Upstream docs: <https://phobos.readthedocs.io> · Phobos CN: <https://phoboscn.top>
+
+## 📌 Final planned version / 计划中的最终版
+
+- **This is the final planned release of this fork: `v0.5.0.0-alpha2-pbsnew8`.** It carries
+  every fix made for the single-player issues reported so far, and it is the last version this
+  fork is planned to receive. No further feature development is planned.
+- **本版本（`v0.5.0.0-alpha2-pbsnew8`）是本分支计划的最后一版**，包含目前为单机遇到的问题所做的
+  全部修复；此后不再规划新的功能开发。
+- The repository stays online as a reference and archive, but it **will no longer be frequently
+  maintained**: there is no regular update cadence, and only a critical problem that breaks
+  normal single-player play might still be looked at. Maintenance effort has moved to a separate
+  platform project.
+- 仓库会继续在线作为参考与存档，但**不会再频繁维护**：没有固定更新节奏，只有影响单机正常游玩的
+  严重问题才可能再看一眼。后续维护重心已转到独立的平台工程。
+- **Multiplayer is not verified.** This final version was tested in single-player only; network
+  play was not tested end-to-end. Treat multiplayer as unsupported.
+- **联机未验证**：本最终版只做过单机测试，没有完整联机实测，联机行为请自行承担风险。
 
 ## What this is / 这是什么
 
@@ -54,7 +71,9 @@ The list below is a summary; the complete reference for every key is in
 - **[Universal scatter shaping](docs/New-or-Enhanced-Logics.md#universal-scatter-shaping)**
   — `Sigma`, `Aspect` and `Divergence` give `BallisticScatter` the same meaning on every
   engine scatter path, extend it to vanilla `ROT`/`Arm` missiles (through their burst
-  point) and keep `Trajectory=Missile` offsets alive through the pre-detonation snap.
+  point) and keep `Trajectory=Missile` offsets alive through the pre-detonation snap. Setting
+  `BallisticScatter.Physical=yes` upgrades that to a real ballistic offset: the missile itself
+  flies to *target centre + offset* and detonates there, anti-air included.
 - **[Spawned missile scatter](docs/New-or-Enhanced-Logics.md#spawned-missile-scatter)** —
   `MissileSpawn=yes` missiles can be made to fly to a point offset from the target centre
   (`Missile.Scatter`), so the engine's own landing payload explodes off-centre.
@@ -129,7 +148,9 @@ The list below is a summary; the complete reference for every key is in
   to warhead effects, freeze for a fixed duration, put the cooldown on the caster, decide
   what a freeze may do to the target's last hit point, and warp the whole `CellSpread`
   radius with per-victim timers or one pooled timer
-  ([docs](docs/Fixed-or-Improved-Logics.md#freeze-a-unit-for-a-fixed-duration)).
+  ([docs](docs/Fixed-or-Improved-Logics.md#freeze-a-unit-for-a-fixed-duration)). A shot never
+  warps the unit that fired it, so a caster standing inside its own `CellSpread` blast can no
+  longer crash the freeze.
 - `Temporal=yes` warheads now also work from any weapon slot instead of only the unit's
   first one ([fix notes](docs/Fixed-or-Improved-Logics.md#bugfixes-and-miscellaneous)).
 
@@ -138,6 +159,10 @@ The list below is a summary; the complete reference for every key is in
 - **[Tactical view zoom](docs/User-Interface.md#tactical-view-zoom)** — the tactical map is
   rendered at a resolution independent of the UI, with configurable zoom levels and
   hotkeys.
+- **Large radial indicators** — range circles of roughly 30 cells and more no longer vanish:
+  past the radius where the vanilla ellipse rasterizer overflows its 32-bit integers, the fork
+  draws the ring itself in double precision. This covers selection circles, building placement
+  previews, superweapon targeting circles and Ares unit rings. No new INI keys.
 - **[Bugfixes](docs/Fixed-or-Improved-Logics.md#bugfixes-and-miscellaneous)** — a set of
   upstream and fork fixes, including the Syringe hook-size correction that removed the
   `faulty return 0 hook` instruction-rebuild warnings.
@@ -159,15 +184,17 @@ Identical to official Phobos:
 
 ## Compatibility and known issues / 兼容性与已知问题
 
-- **This is a personal test build.** The new features have been tested in game, but they
+- **This is a personal build, tested in single-player only.** The new features have been tested in game, but they
   are **not guaranteed to be 100% stable** — keep a backup of `Phobos.dll` and of your
   savegames before switching. Bug reports are welcome on this repository's issue tracker,
   but **do not report them to the official Phobos repository**.
+- **Final version.** `v0.5.0.0-alpha2-pbsnew8` is the last planned build (see the notice at the
+  top). Bug reports may not be answered any more.
 - **Savegames are not compatible between different fork builds.** The new type-level INI
   keys and per-missile save fields change the extension layout, so a save written by an
   older build is refused cleanly. Start a new game after updating.
-- **Multiplayer:** most additions are deterministic and sync-safe, but a few features have
-  not been checked over a full network match yet.
+- **Multiplayer: not verified.** The final version was tested in single-player only; features
+  that touch firing, commands, events or saves have not been checked over a full network match.
 - This fork tracks upstream `v0.5.0.0-alpha2` and is **not** synced with the current
   upstream `develop`.
 
